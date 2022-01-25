@@ -1,0 +1,38 @@
+# Processing of the Contigs, VirFinder
+
+#to run snakemake: conda activate cluster_kaiju
+
+#set a workflow config file
+configfile: "Config/config_samples.yaml"
+SAMPLE = config["samples"]
+
+#if want to run on just some files
+#SAMPLE = ["co-1"]
+
+rule all_virfinder:
+    input:
+        vf="Classifications/vf_merged.txt"
+
+rule virfinder:
+    input:
+        "Assemblies/{sample}_3000.fasta"
+    output:
+        "VirFinder/{sample}_pred_vir_summary_table.txt"
+    conda:
+        "Envs/virfinder.yaml"
+    script:
+        "Scripts/vf.R"
+
+#to have wildcards in the input of a rule but not in the output of the rule
+def table_inputs(folder, name, wildcards):
+    files=expand("%s{sample}%s" % (folder, name), sample=SAMPLE)
+    return files
+
+# Get virfinder results in one file
+rule merge_vf:
+    input:
+        i=table_inputs(folder="VirFinder/", name="_pred_vir_summary_table.txt", wildcards=SAMPLE)
+    output:
+        merge="Classifications/vf_merged.txt"
+    script:
+        "Scripts/merge_virfinder.py"

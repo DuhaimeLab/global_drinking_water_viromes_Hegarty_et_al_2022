@@ -1,0 +1,95 @@
+# Contig processing, blast on viral sequences against mycobacteriophages, pulling out all mycobacteriophage contigs
+
+#to run snakemake: conda activate cluster_kaiju
+
+#set a workflow config file
+configfile: "Config/config_assemblies.yaml"
+SAMPLE = config["assemblies"]
+
+
+#if want to run on just some files
+#SAMPLE = ["B"]
+
+rule all_checkV:
+    input:
+        merged="CheckV/merged_checkV_allcontigs.tsv"
+
+rule checkV_contamination:
+    input:
+        fasta="Assemblies/{sample}_3000.fasta"
+    params:
+        threads="4",
+        directory="/nfs/turbo/cee-kwigg/hegartyb/SnakemakeAssemblies3000/CheckV/{sample}",
+        database="/home/hegartyb/checkv-db-v0.6/"
+    conda:
+        "Envs/checkV.yaml"
+    output:
+        out="CheckV/{sample}/contamination.tsv"
+    shell:
+        """
+        checkv contamination {input.fasta} {params.directory} -t {params.threads} -d {params.database}
+        """
+
+rule checkV_completeness:
+    input:
+        fasta="ViralSeqs/{sample}_3000_viralonly.fa",
+        contamination="CheckV/{sample}/contamination.tsv"
+    params:
+        threads="4",
+        directory="/nfs/turbo/cee-kwigg/hegartyb/SnakemakeAssemblies3000/CheckV/{sample}",
+        database="/home/hegartyb/checkv-db-v0.6/"
+    conda:
+        "Envs/checkV.yaml"
+    output:
+        out="CheckV/{sample}/completeness.tsv"
+    shell:
+        """
+        checkv completeness {input.fasta} {params.directory} -t {params.threads} -d {params.database}
+        """
+
+rule checkV_genomes:
+    input:
+        fasta="ViralSeqs/{sample}_3000_viralonly.fa",
+        complete="CheckV/{sample}/completeness.tsv"
+    params:
+        threads="16",
+        directory="/nfs/turbo/cee-kwigg/hegartyb/SnakemakeAssemblies3000/CheckV/{sample}",
+        database="/home/hegartyb/checkv-db-v0.6/"
+    conda:
+        "Envs/checkV.yaml"
+    output:
+        out="CheckV/{sample}/complete_genomes.tsv"
+    shell:
+        """
+        checkv complete_genomes {input.fasta} {params.directory}
+        """
+
+rule checkV_quality:
+    input:
+        fasta="ViralSeqs/{sample}_3000_viralonly.fa",
+        genome="CheckV/{sample}/complete_genomes.tsv"
+    params:
+        threads="16",
+        directory="/nfs/turbo/cee-kwigg/hegartyb/SnakemakeAssemblies3000/CheckV/{sample}",
+        database="/home/hegartyb/checkv-db-v0.6/"
+    conda:
+        "Envs/checkV.yaml"
+    output:
+        out="CheckV/{sample}/quality_summary.tsv"
+    shell:
+        """
+        checkv quality_summary {input.fasta} {params.directory}
+        """
+
+#to have wildcards in the input of a rule but not in the output of the rule
+def table_inputs(folder, name, wildcards):
+    files=expand("%s{sample}%s" % (folder, name), sample=SAMPLE)
+    return files
+
+rule merge_checkV:
+    input:
+        i=table_inputs(folder="CheckV/", name="/quality_summary.tsv", wildcards=SAMPLE)
+    output:
+        merge="CheckV/merged_checkV_allcontigs.tsv"
+    script:
+        "Scripts/merge_checkv.py"

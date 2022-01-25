@@ -1,0 +1,47 @@
+#to run snakemake: conda activate vibrant_
+#    to build environment, install vibrant dependencies first; then install snakemake
+#    install all packages and dependencies from -c conda-forge
+#    activate environment before running Snakefile
+
+#set a workflow config file
+#configfile: "Config/config_assemblies.yaml"
+#SAMPLE = config["samples"]
+
+#if want to run on just some files
+#SAMPLE = ["co-1"]
+
+rule all_vibrant:
+    input:
+        all="Vibrant/vibrant_merged_contig_list_all.txt"
+
+rule vibrant:
+    input:
+        Assemblies/{sample}_3000.fasta
+    output:
+        "Vibrant/VIBRANT_{sample}/VIBRANT_results_{sample}/VIBRANT_genome_quality_{sample}.tsv"
+    params:
+        d="/scratch/kwigg_root/kwigg/shared_data/A2ViralProcessing/VIBRANT/databases/",
+        m="/scratch/kwigg_root/kwigg/shared_data/A2ViralProcessing/VIBRANT/files/"
+    shell:
+        """
+        python3 VIBRANT/VIBRANT_run.py \
+        -i {input} -t 4 -folder Vibrant/ \
+        -d {params.d} \
+        -m {params.m}
+        """
+
+#to have wildcards in the input of a rule but not in the output of the rule
+def table_inputs_2(folder1, folder2, folder3, name, wildcards):
+    files=expand("%s{sample}%s{sample}%s{sample}%s" % (folder1, folder2, folder3, name), sample=SAMPLE)
+    return files
+
+#all the phages (including circular)
+rule vb_merge_contig_list_all:
+    input:
+        i=table_inputs_2(folder1="Results/Vibrant/VIBRANT_", folder2="_3000/VIBRANT_results_", folder3="_3000/VIBRANT_genome_quality_", name="_3000.tsv", wildcards=SAMPLE)
+    output:
+        merge="Vibrant/vibrant_merged_contig_list_all.txt"
+    params:
+        s=SAMPLE
+    script:
+        "Scripts/merge_vibrant_all.py"
