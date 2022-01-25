@@ -1,0 +1,287 @@
+---
+title: "Drinking Water Meta-Analysis ORF Figure Generation - Beta diversity"
+output: html_notebook
+---
+
+```{r}
+library(DESeq2)
+library(tidyr)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(viridis)
+library(RColorBrewer)
+library(pheatmap)
+library(vegan)
+library(ggthemes)
+library(dendextend)
+library(dichromat)
+```
+
+# Imports
+
+```{r}
+count_data <- read.table("orf_counts_for_deseq.tsv")
+metadata_filt <- read.table("orf_medatadata_for_deseq.tsv")
+```
+
+(make sure that all samples match and the order of count_data matches that of metadata_filt)
+```{r}
+table(colnames(count_data)==rownames(metadata_filt))
+```
+
+## Create DESeq object
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = as.matrix(count_data),
+                              colData=as.matrix(metadata_filt),
+                              design=~residual_type_binary)
+```
+
+### Collapse technical replicates
+```{r}
+dds <- collapseReplicates(dds, groupby = metadata_filt[,colnames(metadata_filt)=="sampling_replicates"])
+```
+
+### Drop samples with fewer than 100 reads
+```{r}
+colSums(counts(dds))
+```
+
+```{r}
+new_counts <- counts(dds)[,colSums(counts(dds))>100]
+```
+
+```{r}
+count_data <- new_counts[,order(colnames(new_counts), decreasing=T)]
+
+metadata_filt <- colData(dds)[rownames(colData(dds)) %in% colnames(count_data),]
+metadata_filt <- metadata_filt[order(rownames(metadata_filt), decreasing=T),]
+```
+
+```{r}
+pheatmap(log10(0.1+count_data))
+```
+
+
+
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = as.matrix(count_data),
+                              colData=as.matrix(metadata_filt),
+                              design=~residual_type_binary)
+```
+
+
+
+```{r}
+abund_table_dis <- t(counts(dds))
+
+abund_table_dis <- abund_table_dis/rowSums(abund_table_dis)
+```
+
+## PCoA based on Bray-Curtis distance (with capscale)
+
+```{r}
+dist_abund_res <- vegan::vegdist(abund_table_dis, method="bray")
+metadata_dis <- tibble(Assembly=colData(dds)@listData$Assembly,
+                       Chlorine=as.numeric(colData(dds)@listData$Chlorine),
+                       Phosphate=as.numeric(colData(dds)@listData$Phosphate),
+                       Temp=as.numeric(colData(dds)@listData$Temp),
+                       pH=as.numeric(colData(dds)@listData$pH),
+                       Conductivity=as.numeric(colData(dds)@listData$Conductivity),
+                       Ammonia=as.numeric(colData(dds)@listData$Ammonia),
+                       Nitrate=as.numeric(colData(dds)@listData$Nitrate),
+                       DO=as.numeric(colData(dds)@listData$DO),
+                       TOC=as.numeric(colData(dds)@listData$TOC),
+                       true_samples=colData(dds)@listData$true_samples,
+                       residual_type_binary=colData(dds)@listData$residual_type_binary,
+                       Citation=colData(dds)@listData$Citation
+                       )
+```
+
+```{r}
+vare.cap <- capscale(dist_abund_res ~ Chlorine+Phosphate+Temp+pH+Conductivity+Ammonia+Nitrate+DO+TOC, 
+                     metadata_dis)
+```
+
+```{r}
+ss <- tibble(Axis.1 = scores(vare.cap)$sites[,1],
+             Axis.2 = scores(vare.cap)$sites[,2],
+             sample = metadata_dis$true_samples,
+             residual = metadata_dis$residual_type_binary,
+             study = metadata_dis$Citation,
+             dwds = metadata_dis$Assembly)
+```
+
+
+```{r}
+pal <- ggthemes::tableau_color_pal(palette="Tableau 10", type="regular")
+
+fig4b <- ggplot(ss, aes(x=Axis.1,y=Axis.2)) + 
+  geom_point(aes(shape = dwds, colour = residual, fill = residual), size=2) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[1,1], yend=vare.cap$CCA$biplot[1,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                   xend=vare.cap$CCA$biplot[2,1], yend=vare.cap$CCA$biplot[2,2],
+                   ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                   xend=vare.cap$CCA$biplot[3,1], yend=vare.cap$CCA$biplot[3,2],
+                   ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                   xend=vare.cap$CCA$biplot[4,1], yend=vare.cap$CCA$biplot[4,2],
+                   ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                   xend=vare.cap$CCA$biplot[5,1], yend=vare.cap$CCA$biplot[5,2],
+                   ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[6,1], yend=vare.cap$CCA$biplot[6,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[7,1], yend=vare.cap$CCA$biplot[7,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[8,1], yend=vare.cap$CCA$biplot[8,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[9,1], yend=vare.cap$CCA$biplot[9,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(),
+        panel.border = element_rect(colour = "grey", fill=NA, size=1),
+        axis.title=element_text(size=12),
+        legend.key=element_blank(),
+        legend.position="bottom",
+        legend.direction="vertical",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        text=element_text(size=10)) + 
+  guides(size="none") + xlab("Axis 1") + ylab("Axis 2") + 
+  scale_shape_manual(name="Distribution System",
+                     values=c(21,10,25,3,4,8,22,23,24,9)) +
+  scale_color_manual(name="Residual Disinfectant?",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 1),
+                     labels = c("No", "Yes")) + 
+  scale_fill_manual(name="Residual Disinfectant?",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 0.3),
+                    labels = c("No", "Yes")) + 
+  coord_equal()
+
+fig4b
+```
+
+```{r}
+png("orf_cca_assembly.png", width=3.2, height=6, units="in", res=400)
+fig4b
+dev.off()
+```
+
+
+
+## Adonis
+
+```{r}
+adonis <- vegan::adonis(dist_abund_res ~ residual_type_binary, data=metadata_dis, 
+                 permutations = 9999)
+adonis
+```
+
+
+
+
+```{r}
+adonis <- vegan::adonis(dist_abund_res ~ Chlorine+Phosphate+Temp+pH++Conductivity+Ammonia+Nitrate+DO+TOC+Assembly, data=metadata_dis, 
+                 permutations = 9999)
+adonis
+```
+
+```{r}
+abund_table_dis_freq <- rowSums(apply(abund_table_dis, c(1,2), function(x) if (x>0) {x=1} else {x=0}))
+
+
+abund_table_dis_freq <- tibble(sample=rownames(abund_table_dis),
+                               KO_count=abund_table_dis_freq)
+
+abund_table_dis_freq$residual <- "Yes"
+abund_table_dis_freq$residual[grep("ND", abund_table_dis_freq$sample)] <- "No"
+```
+
+```{r}
+wt_KO_count <- wilcox.test(abund_table_dis_freq$KO_count[abund_table_dis_freq$residual=="Yes"],
+       abund_table_dis_freq$KO_count[abund_table_dis_freq$residual=="No"])
+wt_KO_count
+```
+
+
+```{r}
+p1 <- ggplot(abund_table_dis_freq, aes(x=residual, y=KO_count, 
+                   color=residual, fill=residual)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  geom_text(aes(y=0, x=1), color="black", label=paste("p-value=", round(wt_KO_count$p.value, 4), sep=""), 
+            size=5.5, nudge_y = 0, nudge_x = 0.2,
+            check_overlap = T) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=24), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(angle=30, vjust=1, hjust=1, size=14, face="italic", colour="black"),
+        text = element_text(size = 14),
+        plot.margin = unit(c(1, 1, 1, 2.2),"lines"),
+        legend.position = "none") +
+  scale_shape_manual(name="",
+                     values=c(21,22,23)) +
+  scale_color_manual(name="",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 1)) + 
+  scale_fill_manual(name="",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 0.3)) + 
+  xlab("") +
+  ylab("KO Count")
+
+p1
+```
+
+```{r}
+png("ko_count_per_sample.png", width=600, height=500)
+p1
+dev.off()
+```
+
+
+```{r}
+abund_table_dis_freq <- apply(abund_table_dis, c(1,2), function(x) if (x>0) {x=1} else {x=0})
+
+KO_count_no_dis <- tibble(KO=names(colSums(abund_table_dis_freq[grep("ND", rownames(abund_table_dis_freq)),])),
+                       count_no=colSums(abund_table_dis_freq[grep("ND", rownames(abund_table_dis_freq)),]))
+
+KO_count_dis <- tibble(KO=names(colSums(abund_table_dis_freq[!grepl("ND", rownames(abund_table_dis_freq)),])),
+                       count_dis=colSums(abund_table_dis_freq[!grepl("ND", rownames(abund_table_dis_freq)),]))
+
+KO_count_comp <- full_join(KO_count_dis, KO_count_no_dis, by=c("KO"))
+
+KO_count_comp[is.na(KO_count_comp)] <- 0
+```
+
+```{r}
+p2 <- ggplot(KO_count_comp, aes(x=count_dis, y=count_no)) +
+  geom_jitter(width=0.1, size=2, alpha=0.2, color=viridis(5)[2]) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=24), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(angle=30, vjust=1, hjust=1, size=14, face="italic", colour="black"),
+        text = element_text(size = 14),
+        plot.margin = unit(c(1, 1, 1, 2.2),"lines"),
+        legend.position = "none") +
+  xlab("Number of Disinfectant Samples") +
+  ylab("Number of No Disinfectant Samples")
+
+p2
+```
+
+

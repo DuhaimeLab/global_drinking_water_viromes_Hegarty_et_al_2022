@@ -1,0 +1,149 @@
+# Read mapping 
+
+#to run snakemake: conda activate snakemake
+
+#set a workflow config file
+configfile: "Config/assemblies_samples_combos.yaml"
+samples=config['sample']
+assemblies=config['assembly']
+combos=config['combinations']
+
+#if want to run on just some files
+#sample = ["B"]
+
+rule all_mappingcompetitively:
+    input:
+        all="CompetitiveMapping/Bowtie2/Results/merged_sample2assembly_mapping.txt",
+        counts=lambda wildcards: ["CompetitiveMapping/Bowtie2/Results/Sample2Assembly/Counts_reads_mapped_{0}.txt".format(combo) for combo in combos],
+        assemblies=lambda wildcards: ["CompetitiveMapping/Bowtie2/BowtieBuilds/{0}_contigs.1.bt2".format(assembly) for assembly in assemblies]
+
+
+rule bowtie_univec:
+    input:
+        read_file_1="/nfs/turbo/cee-kwigg/hegartyb/SnakemakeReadProcessing/Fastp/{samples}_1P.fq",
+        read_file_2="/nfs/turbo/cee-kwigg/hegartyb/SnakemakeReadProcessing/Fastp/{0}_2P.fq",
+        index_build="Bowtie2/UniVecCore/univec_core.rev.1.bt2"
+    params:
+        score_min="G,20,8",
+        p="8",
+        mapping_ref="Bowtie2/UniVecCore/univec_core"
+    output:
+        sam="Bowtie2/UniVecCore/univec_core_{samples}.sam"
+    shell:
+        """
+        bowtie2 -x {params.mapping_ref} -1 {input.read_file_1} -2 {input.read_file_2} -q --score-min {params.score_min} --local -t -p {params.p} -S {output.sam}
+        """
+
+rule view_sam_univec:
+    input:
+        sam="Bowtie2/UniVecCore/univec_core_{samples}.sam"
+    params:
+        F1="2"
+    output:
+        sam="Bowtie2/UniVecCore/univec_core_removed_{samples}.sam"
+    shell:
+        """
+        samtools view -hS -F {params.F1} {input.sam} > {output.sam}
+        """
+
+rule sam_to_fasta_univec:
+    input:
+        sam="ProcessedReads/univec_core_removed_{samples}_R.fq"
+    output:
+        fastqF="ProcessedReads/univec_core_removed_{samples}_F.fq",
+        fastqR="ProcessedReads/univec_core_removed_{samples}_R.fq"
+    shell:
+        """
+        samtools fastq -1 {output.fastqF} -2 {output.fastqR} -0 /dev/null -s /dev/null -n {input.sam}
+        """
+
+# MAP TO ALL CONTIGS
+
+rule bowtie_build:
+    input:
+        mapping_file="/home/hegartyb/AssembliesByDot/{assemblies}_3000.fasta"
+    params:
+        mapping_ref="CompetitiveMapping/Bowtie2/BowtieBuilds/{assemblies}_contigs"
+    output:
+        mapping_ref="CompetitiveMapping/Bowtie2/BowtieBuilds/{assemblies}_contigs.rev.1.bt2",
+        mapping_ref2="CompetitiveMapping/Bowtie2/BowtieBuilds/{assemblies}_contigs.1.bt2"
+    shell:
+        """
+        bowtie2-build -f {input.mapping_file} {params.mapping_ref}
+        """
+
+rule bowtie_virus:
+    input:
+        lambda wildcards: ["CompetitiveMapping/Bowtie2/BowtieBuilds/{0}_contigs.1.bt2".format(assembly) for assembly in assemblies]
+    params:
+        score_min="G,20,8",
+        p="8",
+        combo_name="{combos}"
+    output:
+        sam="CompetitiveMapping/Bowtie2/Results/Sample2Assembly/Reads_align_{combos}.sam"
+    shell:
+        """
+        combo_name={params.combo_name}
+        array_comb=(${{combo_name//--/ }})
+        input_fastqF="ProcessedReads/univec_core_removed_${{array_comb[1]}}_F.fq"
+        echo ${{input_fastqF}}
+        input_fastqR="ProcessedReads/univec_core_removed_${{array_comb[1]}}_R.fq"
+        mapping_ref="CompetitiveMapping/Bowtie2/BowtieBuilds/${{array_comb[0]}}_contigs"
+        echo ${{mapping_ref}}
+        bowtie2 -x ${{mapping_ref}} -1 ${{input_fastqF}} -2 ${{input_fastqR}} -q --score-min {params.score_min} --local -t -p {params.p} -S {output.sam}
+        """
+
+rule view_sam_virus:
+    input:
+        sam="CompetitiveMapping/Bowtie2/Results/Sample2Assembly/Reads_align_{combos}.sam"
+    params:
+        F="2"
+    output:
+        sam="CompetitiveMapping/Bowtie2/Results/Sample2Assembly/Reads_mapped_{combos}.sam"
+    shell:
+        """
+        samtools view -hS -f {params.F} {input.sam} > {output.sam}
+        """
+
+rule view_bam_virus:
+    input:
+        sam="CompetitiveMapping/Bowtie2/Results/Sample2Assembly/Reads_mapped_{combos}.sam"
+
+    output:
+        bam="CompetitiveMapping/Bowtie2/Results/Sample2Assembly/Reads_mapped_{combos}.bam"
+    shell:
+        """
+        samtools view -bS {input.sam} > {output.bam}
+        """
+
+rule sort_virus:
+    input:
+        bam="CompetitiveMapping/Bowtie2/Results/Sample2Assembly/Reads_mapped_{combos}.bam"
+
+    output:
+        sort="CompetitiveMapping/Bowtie2/Results/Sample2Assembly/Sorted_reads_mapped_{combos}.bam"
+    shell:
+        """
+        samtools sort {input.bam} -o {output.sort}
+        """
+
+rule counts_virus:
+    input:
+        bam="CompetitiveMapping/Bowtie2/Results/Sample2Assembly/Sorted_reads_mapped_{combos}.bam"
+    output:
+        counts="CompetitiveMapping/Bowtie2/Results/Sample2Assembly/Counts_reads_mapped_{combos}.txt"
+    shell:
+        """
+        samtools view {input.bam} | cut -f1,3 | sort | uniq | cut -f2 | sort | uniq -c > {output.counts}
+        """
+
+rule merge_counts_virus:
+    input:
+        counts=lambda wildcards: ["CompetitiveMapping/Bowtie2/Results/Sample2Assembly/Counts_reads_mapped_{0}.txt".format(combo) for combo in combos]
+    params:
+        split="_mapped_"
+    output:
+        merge="CompetitiveMapping/Bowtie2/Results/merged_sample2assembly_mapping.txt"
+    script:
+        "Scripts/merge_readmappingcounts.py"
+

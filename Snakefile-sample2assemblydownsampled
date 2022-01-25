@@ -1,0 +1,127 @@
+# Read mapping - downsampled
+
+#to run snakemake: conda activate snakemake, then load 
+
+#set a workflow config file
+configfile: "Config/assemblies_samples_combos.yaml"
+samples=config['sample']
+assemblies=config['assembly']
+combos=config['combinations']
+
+#if want to run on just some files
+#samples = ["mgp80824_B"]
+#assemblies = ["B"]
+#combos = ["B--mgp80824_B"]
+
+rule all_mappingcompetitively:
+    input:
+        "Bowtie2/Results/Sample2Assembly/Downsampled/merged_trimmed_viruses_downsampled_1000.txt"
+
+##### Downsampling
+
+rule downsample_virus:
+    input:
+        fastqF="Bowtie2/Results/Sample2Assembly/ProcessedReads/viral_paired_reads_{combos}_F.fq",
+        fastqR="Bowtie2/Results/Sample2Assembly/ProcessedReads/viral_paired_reads_{combos}_R.fq"
+    conda:
+        "Envs/seqtk.yaml"
+    output:
+        fastqF="Bowtie2/Results/Sample2Assembly/ProcessedReads/downsampled_1000_paired_reads_viral_{combos}_F.fq",
+        fastqR="Bowtie2/Results/Sample2Assembly/ProcessedReads/downsampled_1000_paired_reads_viral_{combos}_R.fq"
+    shell:
+        """
+        seqtk sample -s100 {input.fastqF} 1000 > {output.fastqF}
+        seqtk sample -s100 {input.fastqR} 1000 > {output.fastqR}
+        """
+
+rule bowtie_build:
+    input:
+        mapping_file="ViralSeqsTrimmed/{assemblies}_3000_viralonly.fa"
+    params:
+        mapping_ref="Bowtie2/BowtieBuilds/{assemblies}_viral_only_contigs"
+    output:
+        mapping_ref="Bowtie2/BowtieBuilds/{assemblies}_viral_only_contigs.rev.1.bt2",
+        mapping_ref2="Bowtie2/BowtieBuilds/{assemblies}_viral_only_contigs.1.bt2"
+    shell:
+        """
+        module load bowtie2/2.4.1
+        bowtie2-build -f {input.mapping_file} {params.mapping_ref}
+        """
+
+rule bowtie_virus_downsampled:
+    input:
+        lambda wildcards: ["Bowtie2/BowtieBuilds/{0}_viral_only_contigs.rev.1.bt2".format(assembly) for assembly in assemblies],
+        fastqF="Bowtie2/Results/Sample2Assembly/ProcessedReads/downsampled_1000_paired_reads_viral_{combos}_F.fq",
+        fastqR="Bowtie2/Results/Sample2Assembly/ProcessedReads/downsampled_1000_paired_reads_viral_{combos}_R.fq"
+    params:
+        score_min="G,20,8",
+        p="8",
+        combo_name="{combos}"
+    output:
+        sam="Bowtie2/Results/Sample2Assembly/Downsampled/1000/Viruses_read_mapping_trimmed_{combos}.sam"
+    shell:
+        """
+        module load bowtie2/2.4.1
+        combo_name={params.combo_name}
+        array_comb=(${{combo_name//--/ }})
+        mapping_ref="Bowtie2/BowtieBuilds/${{array_comb[0]}}_viral_only_contigs"
+        echo ${{mapping_ref}}
+        bowtie2 -x ${{mapping_ref}} -1 {input.fastqF} -2 {input.fastqR} -q --score-min {params.score_min} --local -t -p {params.p} -S {output.sam}
+        """
+
+rule view_sam_virus_downsampled:
+    input:
+        sam="Bowtie2/Results/Sample2Assembly/Downsampled/1000/Viruses_read_mapping_trimmed_{combos}.sam"
+    params:
+        F="4"
+    output:
+        sam="Bowtie2/Results/Sample2Assembly/Downsampled/1000/Viruses_mapped_trimmed_{combos}.sam"
+    shell:
+        """
+        module load samtools/1.13
+        samtools view -hS -F {params.F} {input.sam} > {output.sam}
+        """
+
+rule view_bam_virus_downsampled:
+    input:
+        sam="Bowtie2/Results/Sample2Assembly/Downsampled/1000/Viruses_mapped_trimmed_{combos}.sam"
+    output:
+        bam="Bowtie2/Results/Sample2Assembly/Downsampled/1000/Viruses_mapped_trimmed_{combos}.bam"
+    shell:
+        """
+        module load samtools/1.13
+        samtools view -bS {input.sam} > {output.bam}
+        """
+
+rule sort_virus_downsampled:
+    input:
+        bam="Bowtie2/Results/Sample2Assembly/Downsampled/1000/Viruses_mapped_trimmed_{combos}.bam"
+    output:
+        sort="Bowtie2/Results/Sample2Assembly/Downsampled/1000/Sorted_viruses_mapped_trimmed_{combos}.bam"
+    shell:
+        """
+        module load samtools/1.13
+        samtools sort {input.bam} -o {output.sort}
+        """
+
+rule counts_virus_downsampled:
+    input:
+        bam="Bowtie2/Results/Sample2Assembly/Downsampled/1000/Sorted_viruses_mapped_trimmed_{combos}.bam"
+    output:
+        counts="Bowtie2/Results/Sample2Assembly/Downsampled/1000/Reads_align_trimmed_viruses_downsampled_{combos}.txt"
+    shell:
+        """
+        module load samtools/1.13
+        samtools view {input.bam} | cut -f1,3 | sort | uniq | cut -f2 | sort | uniq -c > {output.counts}
+        """
+
+rule merge_counts_virus:
+    input:
+        counts=lambda wildcards: ["Bowtie2/Results/Sample2Assembly/Downsampled/1000/Reads_align_trimmed_viruses_downsampled_{0}.txt".format(combo) for combo in combos]
+    params:
+        split="_downsampled_"
+    output:
+        merge="Bowtie2/Results/Sample2Assembly/Downsampled/merged_trimmed_viruses_downsampled_1000.txt"
+    script:
+        "Scripts/merge_readmappingcounts.py"
+

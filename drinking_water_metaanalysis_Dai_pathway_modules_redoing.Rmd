@@ -1,0 +1,144 @@
+---
+title: "Drinking Water Meta-Analysis ORF Figure Generation"
+output: html_notebook
+---
+
+```{r}
+library(DESeq2)
+library(tidyr)
+library(readr)Dai
+library(dplyr)
+library(ggplot2)
+library(viridis)
+library(RColorBrewer)
+library(pheatmap)
+library(vegan)
+library(ggthemes)
+library(dendextend)
+library(dichromat)
+library(stringr)
+```
+
+# Imports
+
+```{r}
+count_data <- read.table("orf_counts_for_deseq.tsv")
+metadata_filt <- read.table("orf_medatadata_for_deseq.tsv")
+```
+
+(make sure that all samples match and the order of count_data matches that of metadata_filt)
+```{r}
+table(colnames(count_data)==rownames(metadata_filt))
+```
+
+## Create DESeq object
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = as.matrix(count_data),
+                              colData=as.matrix(metadata_filt),
+                              design=~residual_type_binary)
+```
+
+### Collapse technical replicates
+```{r}
+dds <- collapseReplicates(dds, groupby = metadata_filt[,colnames(metadata_filt)=="sampling_replicates"])
+```
+
+## KO hierarchy info
+```{r}
+#KO_hierarchy <- read.table("../PaperDrafts/IntermediaryDataForScripts/KO_Orthology_ko00001.txt", header=F,
+#                       sep="\t", stringsAsFactors=F)
+#colnames(KO_hierarchy) <- c("Level1", "Level2", "Level3", "Level4")
+#KO_hierarchy <- separate(KO_hierarchy, col = Level4, sep = " ", extra = "merge",
+#                         into = c("KO", "Details"))
+
+library(data.table)
+
+kegg_metabolism <- readLines("kegg_metabolism.txt")
+kegg_metabolism <- str_split(kegg_metabolism, pattern = "\t", n = 4)
+kegg_metabolism <- data.frame(kegg_metabolism)
+kegg_metabolism <- data.frame(t(kegg_metabolism))
+rownames(kegg_metabolism) <- NULL
+temp <- data.frame(tstrsplit(kegg_metabolism[,4], split = "\t"))
+ kegg_metabolism <- cbind.data.frame(kegg_metabolism[,1:3], temp)
+colnames(kegg_metabolism) <- c("Level1", "Level2", "Level3", "KO", "Level4")
+```
+
+```{r}
+#collapse countdata based on module
+count_data_level2 <- counts(dds)
+count_data_level2 <- t(count_data_level2)
+count_data_level2 <- count_data_level2/rowSums(count_data_level2)*100
+count_data_level2 <- t(count_data_level2)
+KO_list <- rownames(count_data_level2)
+count_data_level2 <- as_tibble(count_data_level2)
+count_data_level2$KO <- KO_list
+
+
+count_data_level2 <- count_data_level2 %>%
+  inner_join(kegg_metabolism, by="KO") %>%
+  pivot_longer(cols=contains("D"),
+               names_to="Sample",
+               values_to="Count") %>%
+  group_by(Level2, Sample) %>%
+  dplyr::summarize(
+      across(starts_with("Count"), sum)
+    ) 
+
+summary_level2 <- count_data_level2 %>%
+  group_by(Level2) %>%
+  dplyr::summarize(
+      across(starts_with("Count"), sum)
+    ) 
+
+count_data_level2$Level2 <- factor(count_data_level2$Level2, 
+                                   levels=summary_level2$Level2[order(summary_level2$Count)])
+```
+
+
+```{r}
+head(count_data_level2)
+```
+
+```{r}
+pal <- ggthemes::tableau_color_pal(palette="Tableau 20", type="regular")
+
+count_data_level2$Res <- "Yes"
+count_data_level2$Res[grep("ND", count_data_level2$Sample)] <- "No"
+
+fig4d <- ggplot(count_data_level2, aes(x=Sample,y=Level2)) + 
+  geom_point(aes(colour = Res, fill = Res, size=Count), shape=21) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(),
+        panel.border = element_rect(colour = "grey", fill=NA, size=1),
+        axis.title=element_text(size=12),
+        axis.text.x  = element_text(size=8, angle=90, vjust=1, hjust=0.5, colour="black"),
+        legend.key=element_blank(),
+        legend.position="bottom",
+        legend.direction="horizontal",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        text=element_text(size=12)) + 
+  guides(color="none", fill="none") + xlab("Sample") + ylab("Pathway Modules") + 
+  scale_color_manual(name="Residual Disinfectant?",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 1),
+                     labels = c("No", "Yes")) + 
+  scale_fill_manual(name="Residual Disinfectant?",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 0.3),
+                    labels = c("No", "Yes")) +
+  scale_size_continuous(name="Relative Abundance")
+
+fig4d
+```
+
+```{r}
+png(filename="sample_level2_distributions.png", width=7, height=5, units = "in", res=300)
+fig4d
+dev.off()
+```
+
+
+
+
+

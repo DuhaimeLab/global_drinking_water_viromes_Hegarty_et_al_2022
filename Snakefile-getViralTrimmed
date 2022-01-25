@@ -1,0 +1,47 @@
+# Contig processing, blast on viral sequences against mycobacteriophages, pulling out all mycobacteriophage contigs
+
+#to run snakemake: conda activate cluster_kaiju
+
+#set a workflow config file
+configfile: "Config/assemblies_samples_combos.yaml"
+ASSEMBLY = config["assembly"]
+
+#if want to run on just some files
+ASSEMBLY = ["co-1"]
+
+rule all_getallviral:
+    input:
+         m="ViralSeqsTrimmed/merged_3000_trimmed_viruses_only_20211112.fa"
+
+#run R script "identifying_viral_contigs-virfinder_vibrant_virsorter_checkv.Rmd"
+
+rule get_virus_fasta:
+    input:
+        checkv_fasta="/nfs/turbo/cee-kwigg/hegartyb/SnakemakeAssemblies3000/CheckV-ViralSeqs/{assembly}/proviruses.fna",
+        virsorter2_fasta="../VirSorter2/{assembly}_3000.out/final-viral-combined.fa",
+        vibrant_fasta="/nfs/turbo/cee-kwigg/hegartyb/SnakemakeAssemblies3000/Vibrant/VIBRANT_{assembly}_3000/VIBRANT_phages_{assembly}_3000/{assembly}_3000.phages_combined.fna",
+        free_fasta="/home/hegartyb/AssembliesByDot/{assembly}_3000.fasta",
+        clist="viral_contigs_method_identified_by_virfinder_virsorter_vibrant_virsorter2_polish_with_checkv_20211110.txt"
+    params:
+        assembly="{assembly}",
+        asssembly_column="0",
+        contig_column="1"
+    output:
+        fasta="ViralSeqsTrimmed/{assembly}_3000_viralonly.fa"
+    script:
+        "Scripts/get_trimmed_viral_contigs.py"
+
+#to have wildcards in the input of a rule but not in the output of the rule
+def table_inputs(folder, name, wildcards):
+    files=expand("%s{assembly}%s" % (folder, name), assembly=ASSEMBLY)
+    return files
+
+rule merge_get_virus_fasta:
+    input:
+        i=table_inputs(folder="ViralSeqsTrimmed/", name="_3000_viralonly.fa", wildcards=ASSEMBLY)
+    output:
+        o="ViralSeqsTrimmed/merged_3000_trimmed_viruses_only_20211112.fa"
+    shell:
+        """
+        cat {input.i} > {output.o}
+        """

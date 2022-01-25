@@ -1,0 +1,637 @@
+---
+title: "Drinking Water Meta-analysis Figure Generation"
+output: html_notebook
+---
+
+to add: core viral populations
+
+# Load necessary packages
+```{r}
+library(tidyr)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(viridis)
+library(dendextend)
+library(gridExtra)
+library(vegan)
+library(ape)
+library(pheatmap)
+```
+
+
+# Import commmon files
+
+## import tpm normalized read counts
+```{r}
+merged_tpm <- read_tsv("abund_table_tpm_normalized_clusters_with_metadata.tsv")
+```
+
+
+## create abundance table for diversity analyses
+```{r}
+abund_table <- merged_tpm[,-c((ncol(merged_tpm)-42):ncol(merged_tpm))]
+
+#remove low abund stuff below a threshold
+
+
+# trying a log transformation
+#abund_table_log <- log10(abund_table+0.1)
+#abund_table_log[abund_table_log==-1] <- 0
+
+#trying a Hellinger transformation
+#abund_table_hel <- sqrt(abund_table/rowSums(abund_table)) 
+
+#abund_table_rel <- abund_table/rowSums(abund_table)
+```
+
+getting the most abundant contigs
+```{r}
+abund_table_sort_abund <- abund_table[,order(colSums(abund_table), decreasing=T)]
+abund_table_sort_freq <- apply(abund_table, c(1,2), function(x) if (x>0) {x=1} else {x=0})
+abund_table_sort_freq <- abund_table_sort_freq[, order(colSums(abund_table_sort_freq), decreasing=T)]
+```
+
+```{r}
+pheatmap(abund_table_sort_freq[,1:100], cluster_rows = F, cluster_cols = F,
+         color = c("white", "purple"))
+```
+```{r}
+head(colnames(abund_table_sort_freq))
+```
+
+```{r}
+clusters <- read_tsv("merged_3000_trimmed_viruses_only_20211112_95-85_parsed.tsv", col_names=T)
+```
+
+```{r}
+clusters[clusters$cluster %in% "Cluster_2791",]
+```
+
+
+
+```{r}
+head(abund_table_rel)
+```
+
+
+## create metadata for diversity analyses
+```{r}
+metadata <- merged_tpm[,c((ncol(merged_tpm)-42):ncol(merged_tpm))]
+```
+
+
+# Figure 3 - Overview of the viral community. 
+
+## Bray-Curtis distances
+
+```{r}
+dist_abund <- vegan::vegdist(abund_table, method="bray")
+```
+
+```{r}
+dist_abund_mat <- as.matrix(dist_abund)
+colnames(dist_abund_mat) <- metadata$true_samples
+rownames(dist_abund_mat) <- metadata$true_samples
+```
+
+```{r}
+metadata$res <- "Suspected"
+metadata$res[metadata$Disinfectant_Residual=="Chlorine"] <- "Yes - Chlorine"
+metadata$res[metadata$Disinfectant_Residual=="Chloramine"] <- "Yes - Chloramine"
+metadata$res[metadata$Disinfectant_Residual=="No Residual"] <- "No"
+```
+
+```{r}
+metadata$Koppen.Simplified <- substr(metadata$`Koppen Zone`, 1, 1)
+```
+
+
+```{r}
+#Define the annotation color for columns and rows
+annotation_col = data.frame(
+    `Residual Disinfectant` = metadata$res, 
+#    DWDS = metadata$Assembly,
+    Study = metadata$Citation,
+    `DNA extraction` = metadata$Extraction.Method.Simplified,
+    Filter = metadata$Sample.Collection.Method.Simplified,
+    Koppen = metadata$Koppen.Simplified,
+#    `Samples per Assembly` = metadata$`Number of Samples Per Assembly`,
+    Continent = metadata$Continent,
+    check.names = FALSE
+)
+rownames(annotation_col) <- rownames(dist_abund_mat)
+
+annotation_row <- annotation_col
+rownames(annotation_row) <- rownames(annotation_col)
+
+# ann_color should be named vectors
+
+res_col <- c(viridis(5)[2], viridis(5)[1], viridis(5)[4], viridis(5)[3])
+names(res_col) <- unique(metadata$res)
+
+pal <- ggthemes::tableau_color_pal(palette="Tableau 20", type="regular")
+
+#assembly_col <- viridis(unique(length(metadata$Assembly)))
+#names(assembly_col) <- unique(metadata$Assembly)
+
+study_col <- pal(length(unique(metadata$Citation)))
+names(study_col) <- unique(metadata$Citation)
+
+dna_col <- pal(20)[2:(1+length(unique(metadata$Extraction.Method.Simplified)))]
+names(dna_col) <- unique(metadata$Extraction.Method.Simplified)
+
+filter_col <- pal(20)[9:(8+length(unique(metadata$Sample.Collection.Method.Simplified)))]
+names(filter_col) <- unique(metadata$Sample.Collection.Method.Simplified)
+
+continent_col <- pal(20)[4:(3+length(unique(metadata$Continent)))]
+names(continent_col) <- unique(metadata$Continent)
+
+koppen_col <- pal(20)[17:(16+length(unique(metadata$Koppen.Simplified)))]
+names(koppen_col) <- unique(metadata$Koppen.Simplified)
+
+ann_colors = list(
+    `Residual Disinfectant` = res_col,
+#    `DWDS` = assembly_col,
+    Study = study_col,
+    `DNA extraction` = dna_col,
+    Filter = filter_col,
+    Koppen = koppen_col,
+    Continent = continent_col
+)
+pheatmap(dist_abund_mat,
+        annotation_col = annotation_col, 
+        annotation_colors = ann_colors,
+        annotation_names_col = T,
+        color = c(rev(magma(256))), border_color = NA,
+        clustering_method = "ward.D"
+
+)
+```
+
+```{r}
+png("dist_matrix_all_samples.png", width=9, height=8, units="in", res=300)
+
+pheatmap(dist_abund_mat,
+         show_colnames = FALSE, show_rownames = FALSE,
+        annotation_col = annotation_col, 
+        annotation_colors = ann_colors,
+        annotation_names_col = T,
+        color = c(rev(magma(256))), border_color = NA,
+        legend = T, fontsize = 8,
+        clustering_method = "ward.D"
+)
+
+dev.off() 
+```
+
+
+
+```{r}
+PCOA <- pcoa(abund_table_rel)
+#CCA <- cca(abund_table_hel)
+```
+
+```{r}
+ss <- tibble(Axis.1 = PCOA$vectors[,1],
+             Axis.2 = PCOA$vectors[,2],
+             sample = metadata$true_samples,
+             residual = metadata$residual_type_binary,
+             study = metadata$Citation)
+
+pal <- ggthemes::tableau_color_pal(palette="Tableau 20", type="regular")
+
+p1 <- ggplot(ss, aes(x=Axis.1, y=Axis.2)) + 
+  geom_point(aes(colour = study, fill = study), size=2, shape=21) +
+   theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        panel.border = element_rect(colour = "black", fill=NA, size=1),
+        axis.title=element_text(size=12),
+        legend.key=element_blank(),
+        legend.position="bottom",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        legend.text=element_text(size=8),
+        legend.title = element_blank()) +
+  guides(size="none") + xlab("Axis 1") + ylab("Axis 2") +
+  scale_color_manual(name="",
+                     values = alpha(pal(length(unique(ss$study))), 1)) + 
+  scale_fill_manual(name="",
+                     values = alpha(pal(length(unique(ss$study))), 0.3)) + 
+  coord_equal()
+
+p1
+
+p5 <- ggplot(ss, aes(x=Axis.1,y=Axis.2)) + 
+  geom_point(aes(shape = residual, colour = residual, fill = residual), size=6) +
+   theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        panel.border = element_rect(colour = "black", fill=NA, size=1),
+        axis.title=element_text(size=16),
+        legend.key=element_blank(),
+        legend.position="bottom",
+        legend.direction="vertical",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        legend.text=element_text(size=9),
+        legend.title = element_blank()) +
+  guides(size=FALSE) + xlab("NMDS 1") + ylab("NMDS 2") + 
+  scale_shape_manual(name="",
+                     values=c(24,22,22),
+                     labels = c("No Residual Disinfectant",
+                                "Residual Disinfectant",
+                                "Suspected Residual Disinfectant")) +
+  scale_color_manual(name="",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3],
+                                      viridis(5)[2]), 1),
+                     labels = c("No Residual Disinfectant",
+                                "Residual Disinfectant",
+                                "Suspected Residual Disinfectant")) + 
+  scale_fill_manual(name="",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3],
+                                      viridis(5)[2]), 0.3),
+                    labels = c("No Residual Disinfectant",
+                                "Residual Disinfectant",
+                                "Suspected Residual Disinfectant")) + 
+  coord_equal()
+
+p5
+```
+
+```{r}
+png("fig_3_log.png", width=3.2, height=3.2, units="in", res=300)
+
+p1
+
+dev.off() 
+```
+
+
+```{r}
+barplot(PCOA$values$Relative_eig)
+PCOA$values$Relative_eig[c(1,2)]
+```
+
+
+```{r}
+vare.cap <- capscale(abund_table_hel ~ 1)
+```
+
+```{r}
+ss <- tibble(Axis.1 = scores(vare.cap)$sites[,1],
+             Axis.2 = scores(vare.cap)$sites[,2],
+             sample = metadata$true_samples,
+             residual = metadata$residual_type_binary,
+             study = metadata$Citation,
+             dwds = metadata$Assembly)
+```
+
+
+```{r}
+pal <- ggthemes::tableau_color_pal(palette="Tableau 20", type="regular")
+
+fig3 <- ggplot(ss, aes(x=Axis.1, y=Axis.2)) + 
+  geom_point(aes(colour = study, fill = study), size=2, shape=21) +
+   theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        panel.border = element_rect(colour = "black", fill=NA, size=1),
+        axis.title=element_text(size=12),
+        legend.key=element_blank(),
+        legend.position="bottom",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        legend.text=element_text(size=8),
+        legend.title = element_blank()) +
+  guides(size="none") + xlab("Axis 1") + ylab("Axis 2") +
+  scale_color_manual(name="",
+                     values = alpha(pal(length(unique(ss$study))), 1)) + 
+  scale_fill_manual(name="",
+                     values = alpha(pal(length(unique(ss$study))), 0.3)) + 
+  coord_equal()
+
+fig3
+```
+
+
+
+
+
+
+
+
+```{r}
+metadata$Citation[is.na(metadata$Citation)] <- "unpublished"
+metadata$Continent[is.na(metadata$Continent)] <- "North America"
+
+metadata$KoppenSimplified <- metadata$`Koppen Zone`
+metadata$KoppenSimplified <- stringr::str_sub(metadata$KoppenSimplified, 1, 1)
+```
+
+```{r}
+adonis <- vegan::adonis(dist_abund ~ Continent*`KoppenSimplified`*Sample.Collection.Method.Simplified*Extraction.Method.Simplified, data=metadata, permutations = 9999, strata=metadata$Citation)
+adonis
+```
+
+```{r}
+adonis <- vegan::adonis(dist_abund ~ Citation, data=metadata, permutations = 9999)
+adonis
+```
+
+```{r}
+metadata$true_res_bin <- metadata$residual_type_binary
+metadata$true_res_bin[metadata$residual_type_binary=="Unknown"] <- "Residual Disinfectant"
+
+adonis <- vegan::adonis(dist_abund ~ true_res_bin, data=metadata, permutations = 9999)
+adonis
+```
+
+
+
+# Figure 4 - Alpha and beta diversity of the residual and no residual disinfectant samples
+
+## abund table with only Dai et al samples
+
+```{r}
+merged_dis <- merged_tpm %>%
+  filter(Citation=="Dai et al (2020)") %>% 
+  filter(`Koppen Zone`=="Cfb") %>% 
+  filter(Assembly!="D9") %>%
+  filter(Assembly!="D7")
+```
+
+## create abundance table for diversity analyses
+```{r}
+abund_table_dis <- merged_dis[,-c((ncol(merged_dis)-42):ncol(merged_dis))]
+abund_table_dis <- abund_table_dis[,colSums(abund_table_dis)>0]
+```
+
+## create metadata for diversity analyses
+```{r}
+metadata_dis <- merged_dis[,c((ncol(merged_dis)-42):ncol(merged_dis))]
+```
+
+## Ordination only on samples from Dai et al
+
+## Ordination based on Bray-Curtis distance (with capscale - distance-based Redundancy Analysis (db-RDA))
+
+```{r}
+dist_abund_res <- vegan::vegdist(abund_table_dis, method="bray")
+```
+
+```{r}
+vare.cap <- capscale(dist_abund_res ~ Chlorine+Phosphate+Temp+pH+Conductivity+Ammonia+Nitrate+DO+TOC, 
+                     metadata_dis)
+```
+
+```{r}
+ss <- tibble(Axis.1 = scores(vare.cap)$sites[,1],
+             Axis.2 = scores(vare.cap)$sites[,2],
+             sample = metadata_dis$true_samples,
+             residual = metadata_dis$residual_type_binary,
+             study = metadata_dis$Citation,
+             dwds = metadata_dis$Assembly)
+```
+
+
+```{r}
+pal <- ggthemes::tableau_color_pal(palette="Tableau 10", type="regular")
+
+fig4d <- ggplot(ss, aes(x=Axis.1,y=Axis.2)) + 
+  geom_point(aes(shape = dwds, colour = residual, fill = residual), size=2) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[1,1], yend=vare.cap$CCA$biplot[1,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                   xend=vare.cap$CCA$biplot[2,1], yend=vare.cap$CCA$biplot[2,2],
+                   ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                   xend=vare.cap$CCA$biplot[3,1], yend=vare.cap$CCA$biplot[3,2],
+                   ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                   xend=vare.cap$CCA$biplot[4,1], yend=vare.cap$CCA$biplot[4,2],
+                   ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                   xend=vare.cap$CCA$biplot[5,1], yend=vare.cap$CCA$biplot[5,2],
+                   ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[6,1], yend=vare.cap$CCA$biplot[6,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[7,1], yend=vare.cap$CCA$biplot[7,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[8,1], yend=vare.cap$CCA$biplot[8,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[9,1], yend=vare.cap$CCA$biplot[9,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(),
+        panel.border = element_rect(colour = "grey", fill=NA, size=1),
+        axis.title=element_text(size=12),
+        legend.key=element_blank(),
+        legend.position="bottom",
+        legend.direction="vertical",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        text=element_text(size=10)) + 
+  guides(size="none") + xlab("Axis 1") + ylab("Axis 2") + 
+  scale_shape_manual(name="Distribution System",
+                     values=c(21,10,25,3,4,8,22,23,24,9)) +
+  scale_color_manual(name="Residual Disinfectant?",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 1),
+                     labels = c("No", "Yes")) + 
+  scale_fill_manual(name="Residual Disinfectant?",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 0.3),
+                    labels = c("No", "Yes")) + 
+  coord_equal()
+
+fig4d
+```
+
+```{r}
+png("taxonomy_nmds_assembly_legend.png", width=6, height=6, units="in", res=300)
+fig4d
+dev.off()
+```
+
+
+
+## Adonis
+
+```{r}
+adonis <- vegan::adonis(dist_abund_res ~ residual_type_binary, data=metadata_dis, 
+                 permutations = 9999)
+adonis
+```
+
+
+
+
+```{r}
+adonis <- vegan::adonis(dist_abund_res ~ Chlorine+Phosphate+Temp+pH++Conductivity+Ammonia+Nitrate+DO+TOC+Assembly, data=metadata_dis, 
+                 permutations = 9999)
+adonis
+```
+
+
+
+## Looking at Sevillano
+### Beta diversity 
+
+## abund table with only Dai et al samples
+
+```{r}
+merged_sev <- merged_tpm %>%
+  filter(Citation=="Sevillano et al (preprint)") 
+```
+
+```{r}
+metadata_sev <- read_tsv("Sevillano_sample_metadata.tsv")
+
+merged_sev <- full_join(merged_sev, metadata_sev, 
+                        by=c("true_samples"="NCBI Run"))
+```
+
+
+## create abundance table for diversity analyses
+```{r}
+abund_table_sev <- merged_sev[,-c((ncol(merged_sev)-61):ncol(merged_sev))]
+abund_table_sev <- abund_table_sev[,colSums(abund_table_sev)>0]
+```
+
+## create metadata for diversity analyses
+```{r}
+metadata_sev <- merged_sev[,c((ncol(merged_sev)-61):ncol(merged_sev))]
+colnames(metadata_sev)[50:59] <- c("Temp", "pH", "DO", "Conductivity", "Chlorine", "Phosphate", 
+                                   "Nitrate", "Ammonia", "Nitrite", "TOC")
+metadata_sev <- metadata_sev[,c(1,45,50:59)]
+metadata_sev$Nitrite[metadata_sev$Nitrite=="BDL"] <- 0
+metadata_sev$Nitrite <- as.numeric(metadata_sev$Nitrite)
+metadata_sev$Ammonia[metadata_sev$Ammonia=="BDL"] <- 0
+metadata_sev$Ammonia <- as.numeric(metadata_sev$Ammonia)
+metadata_sev$Chlorine[metadata_sev$Chlorine=="BDL"] <- 0
+metadata_sev$Chlorine <- as.numeric(metadata_sev$Chlorine)
+```
+
+## dbRDA only on samples from Dai et al
+
+## dbRDA based on Bray-Curtis distance (with capscale)
+
+```{r}
+dist_abund_sev <- vegan::vegdist(abund_table_sev, method="bray")
+```
+
+```{r}
+pheatmap(log10(0.1+dist_abund_sev),
+        color = c(0, rev(magma(256))), border_color = NA,
+        clustering_method = "ward.D"
+
+)
+```
+
+
+
+```{r}
+vare.cap <- capscale(dist_abund_sev ~ Chlorine+Phosphate+Temp+Conductivity+pH+Ammonia+Nitrate+Nitrite+DO+TOC, 
+                     metadata_sev)
+```
+
+```{r}
+metadata_sev$res <- "Yes"
+metadata_sev$res[metadata_sev$Chlorine<=0.05] <- "No"
+
+ss <- tibble(Axis.1 = scores(vare.cap)$sites[,1],
+             Axis.2 = scores(vare.cap)$sites[,2],
+             sample = metadata_sev$true_samples,
+             dwds = metadata_sev$Site,
+             residual = metadata_sev$res)
+```
+
+
+```{r}
+fig4d <- ggplot(ss, aes(x=Axis.1,y=Axis.2)) + 
+  geom_point(aes(shape = dwds, colour = residual, fill = residual), size=2) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[1,1], yend=vare.cap$CCA$biplot[1,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                   xend=vare.cap$CCA$biplot[2,1], yend=vare.cap$CCA$biplot[2,2],
+                   ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                   xend=vare.cap$CCA$biplot[3,1], yend=vare.cap$CCA$biplot[3,2],
+                   ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                   xend=vare.cap$CCA$biplot[4,1], yend=vare.cap$CCA$biplot[4,2],
+                   ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                   xend=vare.cap$CCA$biplot[5,1], yend=vare.cap$CCA$biplot[5,2],
+                   ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[6,1], yend=vare.cap$CCA$biplot[6,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[7,1], yend=vare.cap$CCA$biplot[7,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[8,1], yend=vare.cap$CCA$biplot[8,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  geom_segment(aes(x=0, y=0,
+                 xend=vare.cap$CCA$biplot[9,1], yend=vare.cap$CCA$biplot[9,2],
+                 ), colour="black", arrow=arrow(length = unit(0.05,"npc"))) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(),
+        panel.border = element_rect(colour = "grey", fill=NA, size=1),
+        axis.title=element_text(size=12),
+        legend.key=element_blank(),
+        legend.position="bottom",
+        legend.direction="vertical",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        text=element_text(size=10)) + 
+  guides(size="none") + xlab("Axis 1") + ylab("Axis 2") + 
+  scale_shape_manual(name="Distribution System",
+                     values=c(21,10,25,3,4,8,22,23,24,9)) +
+  scale_color_manual(name="Residual Disinfectant?",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 1),
+                     labels = c("No", "Yes")) + 
+  scale_fill_manual(name="Residual Disinfectant?",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 0.3),
+                    labels = c("No", "Yes")) + 
+  coord_equal()
+
+fig4d
+```
+
+```{r}
+png("taxonomy_nmds_assembly_legend_Sevillano.png", width=6, height=6, units="in", res=300)
+fig4d
+dev.off()
+```
+
+
+
+## Adonis
+
+```{r}
+adonis <- vegan::adonis(dist_abund_sev ~ res, data=metadata_sev, 
+                 permutations = 9999)
+adonis
+```
+
+
+
+
+```{r}
+adonis <- vegan::adonis(dist_abund_sev ~ Chlorine+Phosphate+Temp+Conductivity+pH+Ammonia+Nitrate+Nitrite+DO+TOC+Site, data=metadata_sev, 
+                 permutations = 9999)
+adonis
+```
+
+

@@ -1,0 +1,93 @@
+# Read mapping 
+
+#to run snakemake: conda activate snakemake
+
+#set a workflow config file
+configfile: "Config/assemblies_samples_combos.yaml"
+assemblies=config['assembly']
+combos=config['combinations']
+
+
+#if want to run on just some files
+#assemblies = ["B"]
+#combos = ["B--mgp80824_B"]
+
+rule all_mappingcompetitively:
+    input:
+        counts="FeatureCounts/merged_viral_contigs_count.txt"
+
+rule blastdb:
+    input:
+        fasta="/home/hegartyb/AssembliesByDot/{assembly}_3000.fasta"
+    params:
+        basepath="Blast/{assembly}_db"
+    output:
+        o1="Blast/{assembly}_db.nsq",
+        o2="Blast/{assembly}_db.nin",
+        o3="Blast/{assembly}_db.nhr"
+    shell:
+        """
+        module load ncbi-blast/2.9.0
+        makeblastdb -in {input.fasta} -dbtype nucl -out {params.basepath}
+        """
+
+rule blast_nf:
+    input:
+        fa="ViralSeqsTrimmed/{assembly}_3000_viralonly.fa",
+        i1="Blast/{assembly}_db.nhr"
+    output:
+        o="Blast/{assembly}_results.txt"
+    params:
+        db="Blast/{assembly}_db",
+        threads=15,
+        numalign=5
+    shell:
+        """
+        module load ncbi-blast/2.9.0
+        blastn -num_threads {params.threads} -num_alignments {params.numalign} \
+        -outfmt "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore" \
+        -db {params.db} -query {input.fa} -out {output.o}
+        """
+
+rule blast2gff:
+    input:
+        blast="Blast/{assembly}_results.txt"
+    params:
+        type="viral"
+    output:
+        gff="Blast/{assembly}.gff"
+    shell:
+        "python Scripts/blast2gff.py {input.blast} {output.gff} {params.type}"
+
+rule featureCounts:
+    input:
+        gff=lambda wildcards: ["Blast/{0}.gff".format(assembly) for assembly in assemblies],
+        bam="Bowtie2/Results/Sample2Assembly/Sorted_reads_mapped_{combos}.bam"
+    output:
+        output="FeatureCounts/{combos}_viral_contigs_count.txt"
+    params:
+        type="viral",
+        combo_name="{combos}",
+        g="ID"
+    shell:
+        """
+        combo_name={params.combo_name}
+        array_comb=(${{combo_name//--/ }})
+        input_gff="Blast/${{array_comb[0]}}.gff"
+        module load singularity
+        singularity exec /nfs/turbo/lsa-dudelabs/containers/subreads/subreads.sif featureCounts -p -t {params.type} -a ${{input_gff}} -g {params.g} -o {output.output} {input.bam}
+        """
+
+rule mergefeatureCounts:
+    input: 
+        counts=lambda wildcards: ["FeatureCounts/{0}_viral_contigs_count.txt".format(combo) for combo in combos]
+    output:
+        merged="FeatureCounts/merged_viral_contigs_count.txt"
+    shell:
+        "python Scripts/merge_orf_mapping.py {output.merged} {input.counts}"
+
+
+
+
+
+

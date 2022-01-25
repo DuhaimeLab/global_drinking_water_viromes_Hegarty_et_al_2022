@@ -1,0 +1,673 @@
+---
+title: "Taxonomy"
+output: html_notebook
+---
+
+```{r}
+library("tidyr")
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(viridis)
+library(ggthemes)
+```
+
+
+# Import Data
+
+## import taxonomy data
+```{r}
+raw_tax_clusters <- read_csv("merge_genome_by_genome_overview.csv")
+raw_tax_clusters$Genome <- sub(".*_3000_viralonly_", "", raw_tax_clusters$Genome)
+```
+
+```{r}
+head(raw_tax_clusters)
+```
+make a column for unique subcluster based on assembly part of 
+```{r}
+raw_tax_clusters$unique_vc_subcluster <- paste(raw_tax_clusters$Assembly,
+                                               raw_tax_clusters$`VC Subcluster`,
+                                               sep="--")
+```
+
+
+number of unique taxonomy clusters
+```{r}
+length(unique(raw_tax_clusters$unique_vc_subcluster))
+```
+
+sort the file based on VC subcluster    
+```{r}
+tax_assigned_clusters <- separate(raw_tax_clusters, `VC Status`, into=c("VC_status", "overlaps"), sep=" ", remove = F)
+```
+
+```{r}
+ANI_clusters <- read_tsv("merged_3000_trimmed_viruses_only_20211112_95-85_parsed.tsv", col_names=T)
+```
+
+```{r}
+tax_assigned_clusters <- tax_assigned_clusters %>% 
+  full_join(ANI_clusters, by=c("Genome"="contig"))
+```
+
+```{r}
+tail(tax_assigned_clusters)
+```
+
+
+```{r}
+table(tax_assigned_clusters$VC_status[grepl("--", tax_assigned_clusters$Genome) & ])
+
+table(tax_assigned_clusters$VC_status[grep("--", tax_assigned_clusters$Genome)])
+length(unique(tax_assigned_clusters$unique_vc_subcluster[grep("--", tax_assigned_clusters$Genome)]))
+table(tax_assigned_clusters$VC_status)
+```
+
+```{r}
+vc_status <- reshape::melt(table(tax_assigned_clusters$VC_status[grep("--", tax_assigned_clusters$Genome)]))
+colnames(vc_status) <- c("Status", "Count")
+vc_status$binary <- "Not Clustered"
+vc_status$binary[vc_status$Status=="Clustered"] <- "Clustered"
+```
+
+only keep clustered sequences
+```{r}
+tax_assigned_clusters <- tax_assigned_clusters[tax_assigned_clusters$VC_status=="Clustered",]
+```
+
+remove clusters that don't have any of my contigs and that don't have a taxonomy assignment
+```{r}
+tax_assigned_clusters$`Genera in VC`[is.na(tax_assigned_clusters$`Genera in VC`)] <- 0
+tax_assigned_clusters$`Families in VC`[is.na(tax_assigned_clusters$`Families in VC`)] <- 0
+tax_assigned_clusters$`Orders in VC`[is.na(tax_assigned_clusters$`Orders in VC`)] <- 0
+
+
+tax_assigned_clusters <- tax_assigned_clusters[!(tax_assigned_clusters$`Genera in VC`==1 & tax_assigned_clusters$`Families in VC`==1 & tax_assigned_clusters$`Orders in VC`==1),]
+
+```
+
+```{r}
+head(tax_assigned_clusters)
+```
+
+
+
+## Add consensus taxonomy
+```{r}
+clusters <- unique(tax_assigned_clusters$unique_vc_subcluster)
+clusters <- clusters[!is.na(clusters)]
+```
+
+
+```{r}
+tax_assigned_clusters$Consensus_Genus <- "Unassigned"
+tax_assigned_clusters$Consensus_Family <- "Unassigned"
+tax_assigned_clusters$Consensus_Order <- "Unassigned"
+```
+
+```{r}
+for (cluster in clusters){
+  tax_subset <- tax_assigned_clusters[!is.na(tax_assigned_clusters$`VC Subcluster`),]
+  tax_subset <- tax_subset[tax_subset$unique_vc_subcluster == cluster,]
+  genus <- unique(tax_subset$Genus[tax_subset$Genus != "Unassigned"])
+  order <- unique(tax_subset$Order[tax_subset$Order != "Unassigned"])
+  family <- unique(tax_subset$Family[tax_subset$Family != "Unassigned"])
+  if (length(genus)==1){
+    tax_assigned_clusters$Consensus_Genus[tax_assigned_clusters$unique_vc_subcluster == cluster] <- genus
+    if (length(family) != 1) {family="Unassigned"}
+    if (length(family) > 1) {family="mixed family"}
+    tax_assigned_clusters$Consensus_Family[tax_assigned_clusters$unique_vc_subcluster == cluster] <- family
+    if (length(order) != 1) {order="Unassigned"}
+    if (length(order) > 1) {order="mixed order"}
+    tax_assigned_clusters$Consensus_Order[tax_assigned_clusters$unique_vc_subcluster == cluster] <- order
+  } else {
+    if (length(genus) > 1) {
+      tax_assigned_clusters$Consensus_Genus[tax_assigned_clusters$unique_vc_subcluster == cluster] <- "mixed genus"
+    }
+    if (length(family)==1){
+      tax_assigned_clusters$Consensus_Family[tax_assigned_clusters$unique_vc_subcluster == cluster] <- family
+      if (length(order) != 1) {order="Unassigned"}
+      if (length(order) > 1) {order="mixed order"}
+      tax_assigned_clusters$Consensus_Order[tax_assigned_clusters$unique_vc_subcluster == cluster] <- order
+    } else {
+      if (length(family) > 1) {
+        tax_assigned_clusters$Consensus_Family[tax_assigned_clusters$unique_vc_subcluster == cluster] <- "mixed family"
+      }
+      if (length(order)==1){
+        tax_assigned_clusters$Consensus_Order[tax_assigned_clusters$unique_vc_subcluster == cluster] <- order
+      }  
+      else {
+        if (length(order) > 1) {
+          tax_assigned_clusters$Consensus_Order[tax_assigned_clusters$unique_vc_subcluster == cluster] <- "mixed order"
+        }
+      }
+    }
+  }
+}   
+```
+
+
+### only keep the viral populations
+```{r}
+tax_assigned_clusters_my_contigs <- tax_assigned_clusters[grep("--", tax_assigned_clusters$Genome),]
+```
+
+```{r}
+write_tsv(tax_assigned_clusters, "tax_assigned_clusters", col_names = T)
+write_tsv(tax_assigned_clusters_my_contigs, "tax_assigned_clusters_my_contigs.txt",col_names = T)
+```
+
+```{r}
+length(unique(tax_assigned_clusters_my_contigs$unique_vc_subcluster))
+```
+
+```{r}
+table(tax_assigned_clusters_my_contigs$Consensus_Genus)
+table(tax_assigned_clusters_my_contigs$Consensus_Family)
+table(tax_assigned_clusters_my_contigs$Consensus_Order)
+```
+
+```{r}
+clusters <- read_tsv("merged_3000_trimmed_viruses_only_20211112_95-85_parsed.tsv", col_names=T)
+clusters_unique <- clusters[!duplicated(clusters$cluster),]
+```
+
+```{r}
+tax_assigned_clusters_viral_pops <- tax_assigned_clusters_my_contigs[tax_assigned_clusters_my_contigs$Genome %in% clusters_unique$contig,]
+```
+
+```{r}
+table(tax_assigned_clusters_viral_pops$Consensus_Genus)
+table(tax_assigned_clusters_viral_pops$Consensus_Family)
+table(tax_assigned_clusters_viral_pops$Consensus_Order)
+```
+
+
+```{r}
+levels(vc_status$Status)[1] <- "Clustered - Not Annotated"
+levels(vc_status$Status)[2] <- "Clustered - Singleton"
+
+levels(vc_status$Status) <- c(levels(vc_status$Status), "Clustered - Annotated")
+vc_status <- rbind(vc_status, c("Clustered - Annotated", nrow(tax_assigned_clusters_my_contigs), "Clustered"))
+
+vc_status$Count <- as.numeric(vc_status$Count)
+vc_status$Count[vc_status$Status=="Clustered - Not Annotated"] <- vc_status$Count[vc_status$Status=="Clustered - Not Annotated"] - vc_status$Count[vc_status$Status=="Clustered - Annotated"]
+
+vc_status$Status <- relevel(vc_status$Status, "Clustered - Annotated")
+
+levels(vc_status$Status) <- c("Clustered - Annotated", "Clustered - Not Annotated",
+                              "Clustered - Singleton", "Outlier", "Overlap", "Singleton")
+```
+
+```{r}
+p2 <- ggplot(vc_status, aes(x=binary, y=Count, 
+                   color=Status, fill=Status)) +
+  geom_col() +
+  coord_flip() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=12), 
+        axis.text.y = element_text(size=12, colour = "black"),
+        axis.text.x  = element_text(size=8, angle=0, vjust=1, hjust=0.5, colour="black"),
+        plot.margin = unit(c(0.5, 1, 5, 0.6),"lines"),
+        #legend.position = "bottom", 
+        legend.direction = "horizontal",
+        legend.text = element_text(size=8),
+        legend.position = c(0.2,-1.7)) +
+  guides(fill=guide_legend(nrow=3, byrow=T), color=guide_legend(nrow=3, byrow=T)) +
+  scale_colour_manual(name = '',
+                     values = alpha(c("black", inferno(8)[7:2]), 1)) +
+  scale_fill_manual(name = '',
+                     values = alpha(c("black", inferno(8)[7:2]), 0.2)) +
+  xlab("") +
+  ylab("Number of Viral Populations") 
+p2
+```
+
+```{r}
+png(filename="clusters.png", width=4, height=2, units = "in", res=300)
+p2
+dev.off()
+```
+
+### Flow diagram to visualize taxonomy
+```{r}
+library(networkD3)
+library(reshape)
+```
+
+
+
+```{r}
+links1 <- melt(table(tax_assigned_clusters_my_contigs$Consensus_Order,
+                     tax_assigned_clusters_my_contigs$Consensus_Family))
+colnames(links1) <- c("order", "family", "count")
+links1 <- links1[links1$count!=0,]
+links1 <- links1[order(links1$order),]
+levels(links1$order)[2] <- "unassigned order"
+levels(links1$family)[length(levels(links1$family))] <- "unassigned family"
+links1
+```
+
+```{r}
+links2 <-melt(table(tax_assigned_clusters_my_contigs$Consensus_Family,
+                     tax_assigned_clusters_my_contigs$Consensus_Genus))
+colnames(links2) <- c("family", "genus", "count")
+links2 <- links2[links2$count!=0,]
+levels(links2$family)[length(levels(links2$family))] <- "unassigned family"
+levels(links2$genus)[levels(links2$genus)=="Unassigned"] <- "unassigned genus"
+links2
+```
+
+```{r}
+# A connection data frame is a list of flows with intensity for each flow
+links <- data.frame()
+
+
+links <- data.frame(
+  source=c(as.character(links1$order), as.character(links2$family)),
+  target=c(as.character(links1$family), as.character(links2$genus)),
+  value=c(links1$count, links2$count)
+)
+ 
+# From these flows we need to create a node data frame: it lists every entities involved in the flow
+nodes <- data.frame(
+  name=c(as.character(links$source), 
+  as.character(links$target)) %>% unique()
+)
+ 
+# With networkD3, connection must be provided using id, not using real name like in the links dataframe.. So we need to reformat it.
+links$IDsource <- match(links$source, nodes$name)-1 
+links$IDtarget <- match(links$target, nodes$name)-1
+ 
+#nodes$group <- as.factor(c("a","a","a","b","b","a","b"))
+
+#links$group <- as.factor(c("type_b","type_a","type_a","type_b","type_a","type_b"))
+
+# prepare color scale: I give one specific color for each node.
+#my_color <- 'd3.scaleOrdinal() .domain(["type_a", "type_b", "a", "b"]) .range(["#B63679FF", "#FB8861FF", "#B63679FF", "#FB8861FF"])'
+ 
+p <- sankeyNetwork(Links = links, Nodes = nodes,
+              Source = "IDsource", Target = "IDtarget",
+              Value = "value", NodeID = "name", 
+              sinksRight=FALSE,
+              fontSize = 18)
+
+# Make the Network. I call my colour scale with the colourScale argument
+#p <- sankeyNetwork(Links = links, Nodes = nodes, Source = "IDsource", Target = "IDtarget", 
+#              Value = "value", NodeID = "name", 
+#              colourScale=my_color, LinkGroup="group", NodeGroup="group",
+#              fontSize = 26)
+p
+
+library(htmlwidgets)
+saveWidget(p, file="sankey_taxonomy.html")
+```
+
+
+#######################################################
+# For Cytoscape
+
+
+## make a smaller version of the network file that only includes pairs with my contigs
+
+```{r}
+network_connections <- read_delim("c1_all_assemblies.ntw", delim = " ", col_names = F)
+colnames(network_connections) <- c("Partner_One", "Partner_Two", "Weight")
+network_connections$Partner_One <- sub(".*_3000_viralonly_", "", network_connections$Partner_One)
+network_connections$Partner_Two <- sub(".*_3000_viralonly_", "", network_connections$Partner_Two)
+```
+
+```{r}
+network_connections$In_One <- 0
+network_connections$In_One[grep("--", network_connections$Partner_One)] <- 1
+
+network_connections$In_Two <- 0
+network_connections$In_Two[grep("--", network_connections$Partner_Two)] <- 1
+
+network_connections$Keep <- network_connections$In_One + network_connections$In_Two
+```
+
+only keep genomes that are mine or connect with one of my contigs
+```{r}
+network_connections_subset <- network_connections[network_connections$Keep>0,]
+```
+
+remove any that are duplicates
+```{r}
+network_connections_subset$Both_Partners <- paste(network_connections_subset$Partner_One,
+                                                  network_connections_subset$Partner_Two,
+                                                  sep = "--")
+network_connections_subset <- network_connections_subset[!duplicated(network_connections_subset$Both_Partners),]
+```
+
+
+### add color attribute
+
+```{r}
+network_connections_subset <- left_join(network_connections_subset, tax_assigned_clusters, by=c("Partner_One"="Genome")) 
+network_connections_subset <- network_connections_subset[,-c(4:6,12,14:24)]
+colnames(network_connections_subset)[c((ncol(network_connections_subset)-2):ncol(network_connections_subset))] <-
+  c("Consensus_Genus_Partner_One", "Consenus_Family_Partner_One", "Consensus_Order_Partner_One")
+```
+
+```{r}
+head(network_connections_subset)
+```
+
+
+
+```{r}
+network_connections_subset$consensus_source_color <- "black"
+network_connections_subset$consensus_source_color[network_connections_subset$Consenus_Family_Partner_One=="Sphaerolipoviridae"] <- "light green"
+network_connections_subset$consensus_source_color[network_connections_subset$Consenus_Family_Partner_One=="Inoviridae"] <- "light blue"
+network_connections_subset$consensus_source_color[network_connections_subset$Consenus_Family_Partner_One=="Tectiviridae"] <- "brown"
+network_connections_subset$consensus_source_color[network_connections_subset$Consenus_Family_Partner_One=="Microviridae"] <- "red"
+network_connections_subset$consensus_source_color[network_connections_subset$Consenus_Family_Partner_One=="mixed family"] <- "black"
+network_connections_subset$consensus_source_color[network_connections_subset$Consenus_Family_Partner_One=="Myoviridae"] <- "blue"
+network_connections_subset$consensus_source_color[network_connections_subset$Consenus_Family_Partner_One=="Podoviridae"] <- "orange"
+network_connections_subset$consensus_source_color[network_connections_subset$Consenus_Family_Partner_One=="Siphoviridae"] <- "green"
+```
+
+```{r}
+network_connections_subset$source_color <- "black"
+network_connections_subset$source_color[network_connections_subset$Family=="Sphaerolipoviridae"] <- "light green"
+network_connections_subset$source_color[network_connections_subset$Family=="Inoviridae"] <- "light blue"
+network_connections_subset$source_color[network_connections_subset$Family=="Tectiviridae"] <- "brown"
+network_connections_subset$source_color[network_connections_subset$Family=="Microviridae"] <- "red"
+network_connections_subset$source_color[network_connections_subset$Family=="Myoviridae"] <- "blue"
+network_connections_subset$source_color[network_connections_subset$Family=="Podoviridae"] <- "orange"
+network_connections_subset$source_color[network_connections_subset$Family=="Siphoviridae"] <- "green"
+```
+
+```{r}
+write_tsv(network_connections_subset, file="c1_all_contigs.ntw", col_names = T)
+```
+
+```{r}
+#network_connections_subset <- read_tsv("../PaperDrafts/CodeForPaper/c1_all_contigs.ntw", col_names = T)
+```
+
+```{r}
+head(network_connections_subset)
+```
+
+
+## Reducing the number of contigs in the network graph
+
+## import rpkm normalized read counts
+```{r}
+merged_tpm <- read_tsv("abund_table_tpm_normalized_clusters_with_metadata.tsv")
+```
+
+## create abundance table for diversity analyses
+```{r}
+abund_table <- merged_tpm[,-c((ncol(merged_tpm)-42):ncol(merged_tpm))]
+
+abund_table_rel <-abund_table/rowSums(abund_table)*100
+hist(log10(colSums(abund_table_rel)))
+table(colSums(abund_table_rel)>1)
+
+abund_table <- abund_table[,colSums(abund_table_rel)>1]
+abund_table_rel <- abund_table_rel[,colnames(abund_table_rel) %in% colnames(abund_table)]
+
+abund_table_pres <- apply(abund_table, c(1,2), function(x) if (x>0) {x=1} else {x=0})
+
+abund_table_order <- abund_table_pres
+abund_table_order[,] <- 0
+
+for (i in 1:nrow(abund_table)) {
+  ranking <- tibble(order=order(abund_table[i,], decreasing=T),
+                    placement=seq(1:ncol(abund_table)))
+  for (j in 1:ncol(abund_table)) {
+    if (abund_table_pres[i,j]==1)
+      abund_table_order[i,j] <- ranking$placement[ranking$order==j]  
+  }
+}
+
+abund_table_order_bin <- matrix(nrow=nrow(abund_table),
+                            ncol=ncol(abund_table), data = 0)
+
+for (i in 1:nrow(abund_table)) {
+  num_clusters <- sum(abund_table_pres[i,])
+  for (j in 1: ncol(abund_table)) {
+    if (abund_table_order[i,j]<=(num_clusters*.1) & abund_table_order[i,j]!=0) 
+      abund_table_order_bin[i,j] <- 1
+  }
+}
+
+table(abund_table_rel>10)
+abund_table_order_bin_1percent <- matrix(nrow=nrow(abund_table),
+                            ncol=ncol(abund_table), data = 0)
+
+for (i in 1:nrow(abund_table)) {
+  for (j in 1: ncol(abund_table)) {
+    if (abund_table_rel[i,j]>=1 & abund_table_order[i,j]!=0) 
+      abund_table_order_bin_1percent[i,j] <- 1
+  }
+}
+
+abund_table_order_bin_10percent <- matrix(nrow=nrow(abund_table),
+                            ncol=ncol(abund_table), data = 0)
+
+for (i in 1:nrow(abund_table)) {
+  for (j in 1: ncol(abund_table)) {
+    if (abund_table_rel[i,j]>=10 & abund_table_order[i,j]!=0) 
+      abund_table_order_bin_10percent[i,j] <- 1
+  }
+}
+
+num_samples_contig_in <- tibble(cluster=colnames(abund_table_pres),
+                                samples_present_in=colSums(abund_table_pres),
+                                read_abundance=colSums(abund_table),
+                                rank=colSums(abund_table_order_bin),
+                                rank1percent=colSums(abund_table_order_bin_1percent),
+                                rank10percent=colSums(abund_table_order_bin_10percent))
+```
+
+```{r}
+pal <- ggthemes::tableau_color_pal(palette="Tableau 10", type="regular")
+num_samples_contig_in$color <- pal(2)[1]
+num_samples_contig_in$color[num_samples_contig_in$samples_present_in>=16] <- pal(2)[2]
+```
+
+
+
+looking at the taxonomy of these abundant clusters
+```{r}
+tax_assigned_clusters_my_contigs <- read_tsv("tax_assigned_clusters_my_contigs.txt")
+```
+
+```{r}
+ANI_clusters <- read_tsv("merged_3000_trimmed_viruses_only_20211112_95-85_parsed.tsv", col_names=T)
+```
+
+```{r}
+num_samples_contig_in_subset <- num_samples_contig_in[num_samples_contig_in$rank1percent>1,] %>% 
+  left_join(ANI_clusters, by="cluster") %>%
+  left_join(tax_assigned_clusters_my_contigs,
+            by=c("contig"="Genome"))
+```
+
+
+```{r}
+clusters <- unique(num_samples_contig_in_subset$cluster)
+clusters <- clusters[!is.na(clusters)]
+```
+
+
+```{r}
+num_samples_contig_in_subset$Consensus_Family_ANI <- "Unassigned"
+```
+
+```{r}
+for (cluster in clusters) {
+  num_samples_contig_in_subset_cluster <- num_samples_contig_in_subset[num_samples_contig_in_subset$cluster == cluster,]
+  family <- unique(num_samples_contig_in_subset_cluster$Consensus_Family[!is.na(num_samples_contig_in_subset_cluster$Consensus_Family)])
+  order <- unique(num_samples_contig_in_subset_cluster$Consensus_Order[!is.na(num_samples_contig_in_subset_cluster$Consensus_Order)])
+  if (length(family)==1) {
+    num_samples_contig_in_subset$Consensus_Family_ANI[num_samples_contig_in_subset$cluster == cluster] <- family
+  }
+  else if (length(family) > 1) {
+    num_samples_contig_in_subset$Consensus_Family_ANI[num_samples_contig_in_subset$cluster == cluster] <- "mixed family"
+    if (length(order)==1) {
+      num_samples_contig_in_subset$Consensus_Family_ANI[num_samples_contig_in_subset$cluster == cluster] <- "unknown family - Caudovirales"
+    }
+  }
+}
+
+num_samples_contig_in_subset <- num_samples_contig_in_subset[!duplicated(num_samples_contig_in_subset$cluster),]
+```
+
+### no color based on family
+```{r}
+p4 <- ggplot(num_samples_contig_in_subset, aes(x=samples_present_in,
+                                            y=rank1percent, 
+                                            color=family_color,
+                                            fill=family_color)) + 
+  geom_point(shape=21) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"),
+        panel.border = element_rect(colour = "black", fill=NA, size=1),
+        axis.text=element_text(size=8, colour="black"),
+        axis.title=element_text(size=10),
+        legend.key=element_blank(),
+        legend.position = "none", 
+        plot.margin = unit(c(0.2, 0.2, 2, 0.6),"lines"),
+        legend.direction = "horizontal",
+        legend.text = element_text(size=8),
+        legend.title = element_text(size=10),
+        legend.background = element_blank()) +
+  xlab("Number of Samples Present In") + ylab("Number of Samples where Abundant") + 
+  #scale_y_log10() +
+  scale_fill_manual(name = '',
+                   values = alpha(rep("grey", 6), 0.4),
+                    labels = c("Unknown", "Myoviridae", "Siphoviridae", 
+                               "Unknown - Caudovirales", "Podoviridae", "Microviridae")
+                    ) +
+  scale_color_manual(name = '',
+                    values = alpha(rep("black", 6), 1),
+                    labels = c("Unknown", "Myoviridae", "Siphoviridae", 
+                               "Unknown - Caudovirales", "Podoviridae", "Microviridae")
+                    )
+
+p4
+```
+
+```{r}
+png(filename="samples_abundant_vs_samples_present.png", width=5, height=4, units = "in", res=300)
+p4
+dev.off()
+```
+
+
+```{r}
+num_samples_contig_in_top3 <- num_samples_contig_in[num_samples_contig_in$rank1percent>1,] %>% 
+  left_join(ANI_clusters, by="cluster") %>%
+  left_join(tax_assigned_clusters_my_contigs,
+            by=c("contig"="Genome"))
+```
+
+
+
+```{r}
+num_samples_contig_in_top3[num_samples_contig_in_top3$samples_present_in>60 |
+                               num_samples_contig_in_top3$rank1percent>30,]
+```
+
+top 3 (picked the ones that had the taxonomic assignment if multiple)
+1) Cluster_905; SRR6797143--NODE_753_length_12267_cov_1_923052||full (taxonmic assignment); 12,243bp
+S41-73--NODE_704_length_55480_cov_706_982747||full; 55219bp
+2) Cluster_2791; Dundee_Maria--Dundee_Maria_0001880||full (taxonomic assignment); 4462bp
+	SRR6797136--NODE_313_length_35002_cov_69_726271||full; 35000bp
+3) Cluster_1288; London_Maria--London_Maria_0000218||full; 46843bp
+
+#looking at these a bit more
+```{r}
+VP_905 <- ANI_clusters[grep("Cluster_905", ANI_clusters$cluster),]
+```
+
+
+
+
+## import DRAM annotations
+```{r}
+annotations <- read_tsv("merged_annotations.tsv", col_names = T)
+colnames(annotations)[2] <- "Geneid"
+colnames(annotations)[4] <- "UniqContig"
+colnames(annotations)[5] <- "Start"
+colnames(annotations)[7] <- "End"
+annotations <- annotations[,-1]
+annotations <- separate(annotations, col="UniqContig", into=c("Assembly", "Contig"), sep = "--", remove = F)
+
+```
+
+```{r}
+annotations_sub <- annotations[annotations$UniqContig=="SRR6797143--NODE_753_length_12267_cov_1_923052||full",]
+
+write_tsv(annotations_sub, "annotations_SRR6797143--NODE_753_length_12267_cov_1_923052||full.tsv")
+```
+
+```{r}
+annotations_sub <- annotations[annotations$UniqContig=="S41-73--NODE_704_length_55480_cov_706_982747||full",]
+
+write_tsv(annotations_sub, "S41-73--NODE_704_length_55480_cov_706_982747||full.tsv")
+```
+
+```{r}
+annotations_sub <- annotations[annotations$UniqContig=="Dundee_Maria--Dundee_Maria_0001880||full",]
+
+write_tsv(annotations_sub, "Dundee_Maria--Dundee_Maria_0001880||full.tsv")
+```
+
+```{r}
+annotations_sub <- annotations[annotations$UniqContig=="SRR6797136--NODE_313_length_35002_cov_69_726271||full",]
+
+write_tsv(annotations_sub, "SRR6797136--NODE_313_length_35002_cov_69_726271||full.tsv")
+```
+
+```{r}
+annotations_sub <- annotations[annotations$UniqContig=="London_Maria--London_Maria_0000218||full",]
+
+write_tsv(annotations_sub, "London_Maria--London_Maria_0000218||full.tsv")
+```
+
+
+### consider a sample "high frequency" if it is in at least 10% of samples and use for making a map
+
+```{r}
+high_freq_contig <- num_samples_contig_in$contig[num_samples_contig_in$samples_present_in>(nrow(abund_table)/10)]
+#high_freq_contig <- clusters[clusters$cluster %in% high_freq_contig,]
+clusters_unique <- clusters[!duplicated(clusters$cluster),]
+high_freq_contig <- clusters_unique[clusters_unique$cluster %in% high_freq_contig,]
+
+
+network_connections_high_freq <- network_connections_subset
+
+network_connections_high_freq$In_One <- 0
+network_connections_high_freq$In_One[network_connections_high_freq$Partner_One %in% high_freq_contig$contig] <- 1
+
+network_connections_high_freq$In_Two <- 0
+network_connections_high_freq$In_Two[network_connections_high_freq$Partner_Two %in% high_freq_contig$contig] <- 1
+
+network_connections_high_freq$In_One[!grepl("--", network_connections_high_freq$Partner_One)] <- 0.5
+
+network_connections_high_freq$In_Two[!grepl("--", network_connections_high_freq$Partner_Two)] <- 0.5
+
+network_connections_high_freq$Keep <- network_connections_high_freq$In_One + network_connections_high_freq$In_Two
+
+network_connections_high_freq <- network_connections_high_freq[network_connections_high_freq$Keep>1,]
+
+```
+
+
+
+```{r}
+write_tsv(network_connections_high_freq, file="c1_high_freq_viral_pops_and_connected_genomes.ntw", col_names = T)
+```
+
+
+
+

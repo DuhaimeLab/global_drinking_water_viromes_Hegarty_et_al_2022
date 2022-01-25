@@ -1,0 +1,399 @@
+---
+title: "Identifying Viral Contigs"
+output: html_notebook
+---
+
+```{r}
+library(ggplot2)
+library(plyr)
+library(reshape2)
+library(viridis)
+library(treemapify)
+library(tidyr)
+library(pheatmap)
+library(dplyr)
+library(gridExtra)
+library(readr)
+```
+
+
+
+# All Viral Contigs
+
+## checkV
+```{r}
+checkV <- read.table("../PaperDrafts/IntermediaryDataForScripts/merged_checkV_allcontigs.tsv", sep="\t", 
+                     stringsAsFactors=F, header=F)
+checkV <- data.frame(assembly=checkV$V1, contig_id=checkV$V2, 
+                     checkv_provirus=checkV$V4,
+                     checkv_original_qualities=checkV$V9,
+                     checkv_completeness=checkV$V11,
+                     checkv_contamination=checkV$V13,
+                     checkv_viral_genes=checkV$V7,
+                     checkv_host_genes=checkV$V8,
+                     checkv_total_genes=checkV$V6,
+                     checkv_length=checkV$V3)
+checkV$contig_id <- sub("\\.", "_", checkV$contig_id)
+
+checkV$uniq_contig <- paste(checkV$assembly, checkV$contig_id, sep="--")
+```
+
+## VIBRANT
+```{r}
+vb_c <- read.table("../PaperDrafts/IntermediaryDataForScripts/vibrant_merged_contig_list_all.txt", header=F, sep="\t", stringsAsFactors=F)
+vb_c <- data.frame(method="vibrant", assembly=vb_c$V1, contig=vb_c$V2, vibrant_original_quality=vb_c$V4)
+vb_c$vibrant_prophage <- "No"
+vb_c$vibrant_prophage[grep("_fragment_", vb_c$contig)] <- "Yes"
+vb_c$contig <- gsub("_fragment_.*", "", vb_c$contig)
+vb_c$contig <- sub("\\.", "_", vb_c$contig)
+vb_c$uniq_contig <- paste(vb_c$assembly, vb_c$contig, sep="--")
+vb_c <- vb_c[!duplicated(vb_c$uniq_contig),]
+```
+
+## VirFinder
+```{r}
+vf_c <- read.table("../PaperDrafts/IntermediaryDataForScripts/vf_merged.txt", header=T, stringsAsFactors=F)
+vf_c <- vf_c[as.numeric(vf_c$score)>=0.7,]
+vf_c <- data.frame(method="virfinder", assembly=vf_c$sample, contig=vf_c$name, virfinder_score=vf_c$score, virfinder_pvalue=vf_c$pvalue)
+vf_c$contig <- sub("\\.", "_", vf_c$contig)
+vf_c$uniq_contig <- paste(vf_c$assembly, vf_c$contig, sep="--")
+vf_c <- vf_c[!duplicated(vf_c$uniq_contig),]
+
+```
+
+## VirSorter
+```{r}
+vs_c <- read.table("../PaperDrafts/IntermediaryDataForScripts/vs_merged_all.txt", header=F, sep="\t", stringsAsFactors=F)
+vs_c <- data.frame(method="virsorter", assembly=vs_c$V1, contig=vs_c$V2, virsorter_category=vs_c$V3)
+vs_c$contig <- sub("-circula", "", vs_c$contig)
+vs_c$contig <- sub("uth", "South", vs_c$contig)
+vs_c$contig <- sub("pannenburg", "Spannenburg", vs_c$contig)
+vs_c$uniq_contig <- paste(vs_c$assembly, vs_c$contig, sep="--")
+vs_c <- vs_c[!duplicated(vs_c$uniq_contig),]
+```
+
+## VirSorter2
+```{r}
+vs2_c <- read.table("../PaperDrafts/IntermediaryDataForScripts/vs2_merged_file.txt", header=T, sep="\t", stringsAsFactors=F)
+vs2_c <- separate(vs2_c, col = seqname, into = c("Contig", "Type"), "\\|\\|")
+vs2_c$assembly <- sub("_3000", "", vs2_c$Assembly)
+vs2_c$Contig <- sub("\\.", "_", vs2_c$Contig)
+vs2_c$uniq_contig <- paste(vs2_c$assembly, vs2_c$Contig, sep="--")
+vs2_c <- vs2_c[!duplicated(vs2_c$uniq_contig),]
+```
+
+## Merging
+```{r}
+viruses <- full_join(x=checkV, y=vf_c, by = c("uniq_contig", "assembly"))
+viruses <- full_join(x=viruses, y=vb_c, by = c("uniq_contig", "assembly"))
+viruses <- full_join(x=viruses, y=vs_c, by = c("uniq_contig", "assembly"))
+viruses <- full_join(x=viruses, y=vs2_c, by = c("uniq_contig", "assembly"))
+```
+
+```{r}
+viruses$percent_host <- viruses$checkv_host_genes/viruses$checkv_total_genes*100
+viruses$percent_viral <- viruses$checkv_viral_genes/viruses$checkv_total_genes*100
+#viruses_high$num_methods <- rowSums(viruses_high[,40:43])
+viruses$percent_unknown <- 100-(viruses$checkv_host_genes+viruses$checkv_viral_genes)/viruses$checkv_total_genes*100
+
+viruses$virsorter_category[is.na(viruses$virsorter_category)] <- 0
+viruses$vibrant_original_quality[is.na(viruses$vibrant_original_quality)] <- 0
+viruses$virfinder_score[is.na(viruses$virfinder_score)] <- 0
+viruses$viral[is.na(viruses$viral)] <- 0
+viruses$hallmark[is.na(viruses$hallmark)] <- 0
+viruses$percent_viral[is.na(viruses$percent_viral)] <- 0
+```
+
+
+######################################################################
+# New rules for keeping
+
+## Getting Score for Deciding Whether to Keep
+```{r}
+viruses$keep_score <- 0
+
+viruses$keep_score[viruses$virsorter_category=="1"] <- 1
+viruses$keep_score[viruses$virsorter_category=="2"] <- 0.52
+viruses$keep_score[viruses$virsorter_category=="3"] <- 0.333
+viruses$keep_score[viruses$virsorter_category=="4"] <- 1
+viruses$keep_score[viruses$virsorter_category=="5"] <- 0.52
+viruses$keep_score[viruses$virsorter_category=="6"] <- 0.333
+
+viruses$keep_score[viruses$vibrant_original_quality=="high quality draft"] <- viruses$keep_score[viruses$vibrant_original_quality=="high quality draft"] + 1
+viruses$keep_score[viruses$vibrant_original_quality=="medium quality draft"] <- viruses$keep_score[viruses$vibrant_original_quality=="medium quality draft"] + 0.52
+viruses$keep_score[viruses$vibrant_original_quality=="low quality draft"] <- viruses$keep_score[viruses$vibrant_original_quality=="low quality draft"] + 0.333
+
+viruses$keep_score[viruses$virfinder_score>=0.7] <- viruses$keep_score[viruses$virfinder_score>=0.7] + 0.52
+viruses$keep_score[viruses$virfinder_score>=0.9] <- viruses$keep_score[viruses$virfinder_score>=0.9] + 1
+
+
+viruses$keep_score[viruses$viral>=50] <- viruses$keep_score[viruses$viral>=50] + 0.333
+viruses$keep_score[(viruses$viral>=50 & viruses$checkv_host_genes==0) & viruses$checkv_viral_genes==0] <- viruses$keep_score[(viruses$viral>=50 & viruses$checkv_host_genes==0) & viruses$checkv_viral_genes==0] + 0.52
+viruses$keep_score[viruses$hallmark>2] <- viruses$keep_score[viruses$hallmark>2] + 1
+viruses$keep_score[viruses$viral>=95] <- viruses$keep_score[viruses$viral>=95] + 1
+
+viruses$keep_score[viruses$percent_viral>=50] <- viruses$keep_score[viruses$percent_viral>=50] + 1
+viruses$keep_score[viruses$checkv_viral_genes==0 & viruses$checkv_host_genes>=1] <- 0
+viruses$keep_score[(viruses$checkv_viral_genes*3) <= viruses$checkv_host_genes] <- 0
+viruses$keep_score[viruses$checkv_length>50000 & viruses$hallmark==0] <- 0
+```
+
+### keep high quality by any method (minus discard rules at bottom), medium quality in at least 3, low if consensus with others 
+```{r}
+viruses$keep_score_high <- 0
+viruses$keep_score_high[viruses$keep_score>=1] <- 1
+```
+
+```{r}
+table(viruses$keep_score_high)
+```
+
+```{r}
+ggplot(viruses, aes(x=keep_score, y=percent_viral,
+                   color=log10(0.1+checkv_length), fill=log10(0.1+checkv_length))) +
+  geom_point(alpha=0.5) +
+  theme_light() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "bottom"
+  ) +
+  scale_fill_viridis(option = "magma") +
+  scale_color_viridis(option = "magma") +
+  xlab("Viral Sorting Score") +
+  ylab("Percent Genes Viral") +
+  coord_flip()
+
+ggplot(viruses, aes(x=keep_score, y=percent_viral,
+                   color=percent_unknown, fill=percent_unknown)) +
+  geom_point(alpha=0.5) +
+  theme_light() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "bottom"
+  ) +
+  scale_fill_viridis(option = "inferno") +
+  scale_color_viridis(option = "inferno") +
+  xlab("Viral Sorting Score") +
+  ylab("Percent Genes Viral") +
+  coord_flip()
+```
+
+```{r}
+hist(viruses$keep_score[viruses$keep_score_high==1])
+```
+
+
+```{r}
+ggplot(viruses, aes(x=keep_score_high, y=percent_viral,
+                   color=keep_score, fill=keep_score)) +
+  geom_point(alpha=0.5) +
+  theme_light() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "bottom"
+  ) +
+  scale_fill_viridis(option = "viridis") +
+  scale_color_viridis(option = "viridis") +
+  xlab("Keep as Viral") +
+  ylab("Percent Genes Viral") +
+  coord_flip()
+```
+
+
+
+```{r}
+viruses$keep_score_high <- 0
+viruses$keep_score_high[viruses$keep_score>=1] <- 1
+
+viruses_high <- viruses[viruses$keep_score_high==1,]
+```
+
+```{r}
+
+
+ggplot(viruses_high, aes(x=percent_host, y=percent_viral,
+                   color=keep_score, fill=keep_score)) +
+  geom_point(alpha=0.5) +
+  theme_light() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "bottom"
+  ) +
+  scale_fill_viridis(option = "viridis") +
+  scale_color_viridis(option = "viridis") +
+  xlab("Percent Genes Host") +
+  ylab("Percent Genes Viral") +
+  coord_flip()
+
+ggplot(viruses_high, aes(x=percent_host, y=percent_viral,
+                   color=virfinder_score, fill=virfinder_score)) +
+  geom_point(alpha=0.5) +
+  theme_light() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "bottom"
+  ) +
+  scale_fill_viridis(option = "magma") +
+  scale_color_viridis(option = "magma") +
+  xlab("Percent Genes Host") +
+  ylab("Percent Genes Viral") +
+  coord_flip()
+
+
+ggplot(viruses_high, aes(x=percent_host, y=percent_viral,
+                   color=log10(0.1+hallmark), 
+                   fill=log10(0.1+hallmark))) +
+  geom_point(alpha=0.5) +
+  theme_light() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "bottom"
+  ) +
+  scale_fill_viridis(option = "viridis") +
+  scale_color_viridis(option = "viridis") +
+  xlab("Percent Genes Host") +
+  ylab("Percent Genes Viral") +
+  coord_flip()
+
+ggplot(viruses_high, aes(x=percent_host, y=percent_viral,
+                   color=log10(checkv_length), fill=log10(checkv_length))) +
+  geom_point(alpha=0.5) +
+  theme_light() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "bottom"
+  ) +
+  scale_fill_viridis(option = "magma") +
+  scale_color_viridis(option = "magma") +
+  xlab("Percent Genes Host") +
+  ylab("Percent Genes Viral") +
+  coord_flip()
+
+ggplot(viruses_high, aes(x=percent_viral, y=checkv_length,
+                   color=log10(0.1+hallmark), 
+                   fill=log10(0.1+hallmark))) +
+  geom_point(alpha=0.1) +
+  theme_light() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "bottom"
+  ) +
+  scale_fill_viridis(option = "viridis") +
+  scale_color_viridis(option = "viridis") +
+  xlab("Percent Viral") +
+  ylab("Contig Length") +
+  scale_y_log10()
+
+ggplot(viruses_high, aes(x=percent_viral, y=percent_unknown,
+                   color=log10(checkv_length), 
+                   fill=log10(checkv_length))) +
+  geom_point(alpha=0.1) +
+  theme_light() +
+  theme(
+    panel.grid.major.y = element_blank(),
+    panel.border = element_blank(),
+    axis.ticks.y = element_blank(),
+    legend.position = "bottom"
+  ) +
+  scale_fill_viridis(option = "magma") +
+  scale_color_viridis(option = "magma") +
+  xlab("Percent Viral") +
+  ylab("Percent Unknown") 
+```
+
+```{r}
+write_tsv(viruses_high, "viral_contigs_method_identified_by_virfinder_virsorter_vibrant_virsorter2_polish_with_checkv_20211110.txt")
+
+write_tsv(viruses, "all_contigs_viral_contigs_identified_by_virfinder_virsorter_vibrant_virsorter2_polish_with_checkv_20211110.txt")
+
+write.table(viruses_high$uniq_contig, "viral_contigs_list_method_identified_by_virfinder_virsorter_vibrant_virsorter2_polish_with_checkv_20211110.txt", quote=F, row.names = F)
+```
+
+### Looking at how rules add things
+## Getting Score for Deciding Whether to Keep
+
+```{r}
+viruses$keep_score <- 0
+```
+
+
+### High confidence, keep if at least one of these
+```{r}
+viruses$keep_score[viruses$virsorter_category=="1"] <- 1
+viruses$keep_score[viruses$virsorter_category=="4"] <- 1
+
+viruses$keep_score[viruses$vibrant_original_quality=="high quality draft"] <- viruses$keep_score[viruses$vibrant_original_quality=="high quality draft"] + 1
+viruses$keep_score[viruses$vibrant_original_quality=="medium quality draft"] <- viruses$keep_score[viruses$vibrant_original_quality=="medium quality draft"] + 1
+
+viruses$keep_score[viruses$virfinder_score>=0.9] <- viruses$keep_score[viruses$virfinder_score>=0.9] + 1
+
+viruses$keep_score[viruses$hallmark>2] <- viruses$keep_score[viruses$hallmark>2] + 1
+
+viruses$keep_score[viruses$viral>=95] <- viruses$keep_score[viruses$viral>=95] + 1
+
+viruses$keep_score[viruses$percent_viral>=50] <- viruses$keep_score[viruses$percent_viral>=50] + 1
+
+viruses$keep_score[(viruses$viral>=50 & viruses$checkv_host_genes==0) & viruses$checkv_viral_genes==0] <- viruses$keep_score[(viruses$viral>=50 & viruses$checkv_host_genes==0) & viruses$checkv_viral_genes==0] + 1
+```
+
+```{r}
+table(viruses$keep_score>=1)
+```
+
+
+### Medium confidence, keep if both of these
+```{r}
+viruses$keep_score[viruses$virsorter_category=="2"] <- viruses$keep_score[viruses$virsorter_category=="2"] + 0.7
+
+viruses$keep_score[viruses$virfinder_score>=0.7] <- viruses$keep_score[viruses$virfinder_score>=0.7] + 0.7
+```
+
+```{r}
+table(viruses$keep_score>=1)
+```
+
+### Low confidence, keep if in agreement with a medium
+```{r}
+viruses$keep_score[viruses$virsorter_category=="3"] <- viruses$keep_score[viruses$virsorter_category=="3"] + 0.3
+viruses$keep_score[viruses$virsorter_category=="5"] <- viruses$keep_score[viruses$virsorter_category=="5"] + 0.3
+viruses$keep_score[viruses$virsorter_category=="6"] <- viruses$keep_score[viruses$virsorter_category=="6"] + 0.3
+
+viruses$keep_score[viruses$viral>=50] <- viruses$keep_score[viruses$viral>=50] + 0.3
+
+viruses$keep_score[viruses$vibrant_original_quality=="low quality draft"] <- viruses$keep_score[viruses$vibrant_original_quality=="low quality draft"] + 0.3
+
+```
+
+
+```{r}
+table(viruses$keep_score>=1)
+```
+
+### Remove things that high confidence, not viral
+```{r}
+viruses$keep_score[viruses$checkv_viral_genes==0 & viruses$checkv_host_genes>=1] <- 0
+viruses$keep_score[(viruses$checkv_viral_genes*3) <= viruses$checkv_host_genes] <- 0
+viruses$keep_score[viruses$checkv_length>50000 & viruses$hallmark==0] <- 0
+viruses$keep_score[viruses$checkv_length>10000 & viruses$percent_host>viruses$percent_unknown] <- 0
+```
+
+
+```{r}
+table(viruses$keep_score>=1)
+```

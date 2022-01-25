@@ -1,0 +1,60 @@
+# Read mapping - getting viral reads
+
+#to run snakemake: conda activate snakemake, then load 
+
+#set a workflow config file
+configfile: "Config/assemblies_samples_combos.yaml"
+samples=config['sample']
+assemblies=config['assembly']
+combos=config['combinations']
+
+#if want to run on just some files
+#samples = ["mgp80824_B"]
+#assemblies = ["B"]
+#combos = ["B--mgp80824_B"]
+
+rule all_mappingcompetitively:
+    input:
+        lambda wildcards: ["Bowtie2/Results/Sample2Assembly/ProcessedReads/viral_paired_reads_{0}_F.fq".format(combo) for combo in combos],
+        lambda wildcards: ["Bowtie2/Results/Sample2Assembly/ProcessedReads/viral_paired_reads_{0}_R.fq".format(combo) for combo in combos]
+
+rule gff2bed:
+    input:
+        gff="Blast/{assembly}.gff"
+    output:
+        bed="Blast/{assembly}.bed"
+    shell:
+        """
+        module load bedops/2.4.35
+        gff2bed < {input.gff} > {output.bed}
+        """
+
+rule get_viral_reads:
+    input:
+        lambda wildcards: ["Blast/{0}.bed".format(assembly) for assembly in assemblies],
+        bam="Bowtie2/Results/Sample2Assembly/Sorted_reads_mapped_{combos}.bam"
+    params:
+        combo_name="{combos}"
+    output:
+        bam="Bowtie2/Results/Sample2Assembly/Sorted_viral_reads_mapped_{combos}.bam"
+    shell:
+        """
+        module load samtools/1.13
+        combo_name={params.combo_name}
+        array_comb=(${{combo_name//--/ }})
+        bed="Blast/${{array_comb[0]}}.bed"
+        samtools view -b -L ${{bed}} {input.bam} > {output.bam}
+        """
+
+
+rule sam_to_fasta_univec_virus:
+    input:
+        sam="Bowtie2/Results/Sample2Assembly/Sorted_viral_reads_mapped_{combos}.bam"
+    output:
+        fastqF="Bowtie2/Results/Sample2Assembly/ProcessedReads/viral_paired_reads_{combos}_F.fq",
+        fastqR="Bowtie2/Results/Sample2Assembly/ProcessedReads/viral_paired_reads_{combos}_R.fq"
+    shell:
+        """
+        module load samtools/1.13
+        samtools fastq -1 {output.fastqF} -2 {output.fastqR} -0 /dev/null -s /dev/null -n {input.sam}
+        """

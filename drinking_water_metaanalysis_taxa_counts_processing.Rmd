@@ -1,0 +1,1309 @@
+---
+title: "Drinking Water Meta-Analysis Taxa Counts Processing"
+output: html_notebook
+---
+
+this notebook takes the viral counts from samtools (or any other program) and 
+does the processing to prepare them for use in taxonomic analyses
+
+# Import Libraries
+
+```{r}
+library(tidyr)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(viridis)
+library(vegan)
+library(gridExtra)
+```
+
+# With all Reads
+
+# Import and processing
+## Import 
+
+## import metadata
+```{r}
+metadata2 <- read_tsv("updated_processed_all_samples_metadata_20211201.txt", col_names = T)
+```
+
+## Import viral read counts and coverage info
+only counting reads that mapped as part of a pair
+
+
+import coverage stats from samtools coverage
+need to remove any lines with NAs (from the lines with the header for each file)
+"merged_viral_contigs_count.txt" - made evening of 11/13
+```{r}
+read_coverage <- read_tsv("merged_viral_contigs_count.txt", col_names = T)
+colnames(read_coverage)[ncol(read_coverage)] <- "ReadCounts"
+read_coverage$ComboId <- sub("FeatureCounts/", "", read_coverage$ComboId)
+read_coverage$ComboId <- sub("_viral_contigs_count.txt", "", read_coverage$ComboId)
+read_coverage <- separate(read_coverage, col="Geneid", into=c("contig", "fragment"), sep="\\|\\|viral_frag_", remove=F)
+read_coverage <- separate(read_coverage, col="ComboId", into=c("Assembly", "sample"), sep="--", remove=F)
+```
+
+```{r}
+head(read_coverage)
+samples <- tibble(unique(read_coverage$sample))
+```
+
+# collapse by sample
+```{r}
+read_coverage_collapsed <- read_coverage %>%
+  select(sample, ReadCounts, Geneid, Length, contig) %>%
+  inner_join(metadata2, by=c("sample"="samples")) %>%
+  group_by(Geneid, true_samples, Assembly, Length, contig) %>%
+  dplyr::summarize(
+    total_mapped_reads=sum(ReadCounts)
+  )
+
+read_coverage_wide <- read_coverage_collapsed %>%
+  pivot_wider(id_cols=c(Geneid, Length), 
+    names_from=true_samples, 
+    values_from=total_mapped_reads,
+    values_fill=0)
+```
+
+
+
+```{r}
+head(read_coverage_collapsed)
+```
+
+### calculate TPM
+TPM = transcripts per kilobase million
+TPM = (num reads / (geneLength/1000)) / (total RPK for sample / 1000000) 
+```{r}
+read_counts_norm <- read_coverage_wide[,-c(1,2)]
+read_counts_norm <- read_counts_norm/(read_coverage_wide$Length/1000)
+sample_counts <- tibble(sample=colnames(read_counts_norm),
+                        viral_read_counts=colSums(read_counts_norm))
+read_counts_norm <- t(read_counts_norm)
+read_counts_norm <- read_counts_norm/(sample_counts$viral_read_counts/1000000)
+read_counts_norm <- t(read_counts_norm)
+
+read_counts_norm <- as_tibble(read_counts_norm)
+read_counts_norm$Geneid <- read_coverage_wide$Geneid
+```
+
+```{r}
+head(read_counts_norm)
+```
+
+
+```{r}
+tpm_long <- read_counts_norm  %>% 
+  pivot_longer(!Geneid, names_to="true_samples", values_to="TPM") %>% 
+  filter(TPM!=0) %>% 
+  inner_join(read_coverage_collapsed, by=c("Geneid", "true_samples") )
+```
+
+
+```{r}
+head(tpm_long)
+```
+
+```{r}
+clusters <- read_tsv("merged_3000_trimmed_viruses_only_20211112_95-85_parsed.tsv", col_names=T)
+```
+
+```{r}
+head(clusters)
+```
+
+## collapse clusters
+```{r}
+tpm_collapsed <- tpm_long %>%
+  inner_join(clusters, by=c("contig", "Length"="length")) %>%
+  group_by(cluster, true_samples, Assembly) %>%
+  dplyr::summarize(
+    total_mapped_reads=sum(total_mapped_reads),
+    average_contig_length=mean(Length),
+    total_contig_legnth=sum(Length),
+    total_tpm=sum(TPM)
+  )
+```
+
+```{r}
+head(tpm_collapsed)
+```
+
+## Getting the number of reads per assembly
+```{r}
+read_counts <- tpm_collapsed %>%
+  inner_join(metadata2, by=c("Assembly")) %>%
+  group_by(Assembly) %>%
+  dplyr::summarize(
+    total_read_count=sum(total_mapped_reads)
+  )
+```
+
+```{r}
+range(read_counts$total_read_count)
+hist(log10(read_counts$total_read_count))
+table(read_counts$total_read_count>=10000)
+```
+
+
+
+
+
+## Getting number of contigs per assembly
+```{r}
+contig_counts <- tibble(Assembly = names(table(tpm_collapsed$Assembly)),
+                        Cluster_count = table(tpm_collapsed$Assembly))
+
+contig_counts <- contig_counts %>%
+  inner_join(metadata2, by=c("Assembly")) %>%
+  filter(!duplicated(Assembly)) %>%
+  group_by(Citation) %>%
+  dplyr::summarize(
+    average_contig_count=mean(Cluster_count)
+  )
+
+
+```
+
+```{r}
+contig_counts
+```
+
+# Using a TPM threshold
+```{r}
+table(tpm_collapsed$total_tpm>1)
+```
+
+```{r}
+tpm_collapsed_keep <- tpm_collapsed[tpm_collapsed$total_tpm>1,]
+```
+
+```{r}
+head(tpm_collapsed_keep)
+```
+
+
+### Make wide
+
+```{r}
+tpm_wide <- tpm_collapsed_keep %>% pivot_wider(id_cols=cluster, 
+                                                       names_from=true_samples, 
+                                                       values_from=total_tpm,
+                                                       values_fill=0)
+```
+
+
+
+```{r}
+write_tsv(as_tibble(tpm_wide), "tpm_wide_contig_clusters.txt")
+```
+
+```{r}
+tpm_wide <- read_tsv("tpm_wide_contig_clusters.txt")
+```
+
+looking at clusters with K07638 annotation
+```{r}
+KO_K07638_clusters <- c("Cluster_105", "Cluster_312", "Cluster_575", "Cluster_841",
+                        "Cluster_905", "Cluster_1195", "Cluster_1547", "Clsuter_2791",
+                        "Cluster_3002", "Cluster_5267", "Cluster_10102")
+
+tpm_K07638 <- tpm_wide[tpm_wide$cluster %in% KO_K07638_clusters,c(1,grep("D", colnames(tpm_wide)))]
+
+tpm_K07638
+```
+
+```{r}
+pheatmap(log10(0.1+tpm_K07638[,-1]),
+         cluster_rows = T)
+```
+
+```{r}
+head(tpm_wide)
+```
+
+```{r}
+tpm_wide_order <- tpm_wide[order(rowSums(tpm_wide[,-1]), decreasing=T),-1]
+```
+
+```{r}
+pheatmap(log10(0.1+tpm_wide_order[1:1000,]),
+         cluster_rows = F)
+```
+
+
+
+
+## format for beta diversity
+```{r}
+abund_table <- t(tpm_wide[,-1])
+colnames(abund_table) <- tpm_wide$cluster
+true_samples <- rownames(abund_table)
+abund_table <- as_tibble(abund_table)
+abund_table$true_samples <- true_samples
+```
+
+```{r}
+metadata_uniq <- metadata2[!duplicated(metadata2$true_samples),]
+```
+
+
+## Bind metadata and abund_table
+```{r}
+merged <- left_join(abund_table, metadata_uniq, by = c("true_samples"))
+```
+
+```{r}
+write_tsv(merged, "abund_table_tpm_normalized_clusters_with_metadata.tsv")
+```
+
+```{r}
+abund_table[1:30,1:30]
+```
+
+
+
+
+
+
+
+
+
+#####################################
+
+# With Merged Read Counts
+### Viral Mapping Read Counts
+```{r}
+#read_counts_downsampled <- read_tsv("merged_trimmed_viruses_downsampled_10000.txt", col_names = F)
+#read_counts_downsampled <- read_tsv("merged_trimmed_viruses_downsampled_1000.txt", col_names = F)
+```
+
+```{r}
+head(read_counts_downsampled)
+```
+
+
+## Process
+
+### Split second column
+```{r}
+colnames(read_counts_downsampled)[1] <- "ComboId"
+read_counts_downsampled <- separate(read_counts_downsampled, col="X2", into=c("ReadCounts", "UniqContig"), sep=" ")
+read_counts_downsampled <- separate(read_counts_downsampled, col="ComboId", 
+                                    into=c("Assembly", "sample"), 
+                                    sep="--", remove=F)
+read_counts_downsampled$ReadCounts <- as.numeric(read_counts_downsampled$ReadCounts)
+```
+
+### Make wide
+
+
+```{r}
+read_counts_wide <- read_counts_downsampled %>%
+  pivot_wider(id_cols=c(UniqContig), 
+    names_from=sample, 
+    values_from=ReadCounts,
+    values_fill=0)
+```
+
+```{r}
+head(read_counts_wide)
+
+range(colSums(read_counts_wide[,-1]))
+hist(log10(0.1+colSums(read_counts_wide[,-1])))
+table(colSums(read_counts_wide[,-1])==10000)
+```
+
+
+## Processing 
+
+### Transpose the matrix to have samples as rows
+
+```{r}
+abund_table<-t(read_counts_wide[,-1])
+```
+
+Turn the abund_table matrix into a tibble.
+```{r}
+rn <- rownames(abund_table)
+abund_table <- as_tibble(abund_table)
+abund_table$samples <- rn
+```
+
+## import metadata
+(replace with updated metadata file once you have the latitudes added)
+```{r}
+metadata2 <- read_tsv("../PaperDrafts/IntermediaryDataForScripts/updated_processed_all_samples_metadata_20210908.txt")
+```
+
+## Bind metadata and abund_table
+Some processing as well, including, delete and rows that have a "NA" for smaple
+and change the type of the column merged$total_reads to be numeric.
+```{r}
+merged <- left_join(abund_table, metadata2, by = c("samples"))
+merged$samples[is.na(merged$samples)] <- 1
+
+merged$total_reads <- as.numeric(merged$total_reads)
+```
+
+## collapse replicates from Dot's study
+"%>%" allows you to "pipe" different functions. For instance this, loads the "merged" 
+dataframe, then processes it to collapse sequencing replicates. 
+In the Dai et al (2020) study, the authors took multiple sequencing replicates
+for every sample that they took. For the analyses we'll be doing, we want to 
+collapse these techincal replicates into one sample. We could have also done this
+before mapping the reads to the contigs.
+```{r}
+abund_table <- merged %>%
+  group_by(true_samples, Assembly, residual_type_binary,  Disinfectant_Residual, 
+           `Koppen Zone`, Sample.Collection.Method.Simplified,
+           Extraction.Method.Simplified, Citation, Country, Continent) %>%
+  summarize(
+    across(1:(ncol(merged)-ncol(metadata2)), mean)
+  )
+```
+
+```{r}
+head(abund_table[1:10, 1:20])
+```
+
+### Remove viral populations that don't have at least 10 reads
+Also, transpose the matrix, so that now the viral populations are the columns
+and the samples are rows
+This will be important for joining together this read coverage information with
+the sample metadata.
+
+```{r}
+abund_table_reads <- abund_table[,-c(1:10)]
+abund_table_reads <- abund_table_reads[,colSums(abund_table_reads)>11]
+#last row is all NAs
+abund_table_reads <- abund_table_reads[-nrow(abund_table_reads),]
+abund_table <- abund_table[-nrow(abund_table),]
+```
+
+# Richness and Evenness
+
+### Calculate alpha diversity
+Calculate the Shannon and Simpson diversities (take into account evenness, as
+well as the number of taxa), as well as the number of taxa (viral populations).
+```{r}
+alpha_wide <- abund_table[,1:10]
+alpha_wide$shannon <- vegan::diversity(abund_table_reads, index = "shannon", MARGIN = 1)
+alpha_wide$simpson <- vegan::diversity(abund_table_reads, MARGIN = 1, index = "simpson")
+alpha_wide$observed <- vegan::specnumber(abund_table_reads, MARGIN = 1)
+```
+
+```{r}
+alpha_wide$total_read_counts <- rowSums(abund_table[,-c(1:10)])
+
+ggplot(alpha_all_samples, aes(x=total_read_counts, y=observed,
+                        color=Disinfectant_Residual, fill=Disinfectant_Residual)) +
+  geom_point(alpha=0.5, shape=21) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "right") +
+  xlab("Average Downsampled Reads by True Sample") +
+  ylab("Number of Taxa") 
+
+```
+if have many fewer reads, shouldn't include them.
+discard, for now, samples with fewer than 5000 reads
+
+```{r}
+alpha_all_samples <- alpha_wide
+alpha_wide <- alpha_all_samples[alpha_all_samples$total_read_counts>5000,]
+
+mean(alpha_wide$shannon)
+sd(alpha_wide$shannon)
+
+mean(alpha_wide$observed)
+sd(alpha_wide$observed)
+```
+
+### visualizing the alpha diversity differences by sample
+```{r}
+alpha_wide$res <- "Suspected"
+#alpha_wide$res[alpha_wide$residual_type_binary=="No Residual Disinfectant"] <- "No"
+#alpha_wide$res[alpha_wide$residual_type_binary=="Residual Disinfectant"] <- "Yes"
+
+alpha_wide$res[alpha_wide$Disinfectant_Residual=="Chlorine"] <- "Yes - Chlorine"
+alpha_wide$res[alpha_wide$Disinfectant_Residual=="Chloramine"] <- "Yes - Chloramine"
+alpha_wide$res[alpha_wide$Disinfectant_Residual=="No Residual"] <- "No"
+
+p3 <- ggplot(alpha_wide, aes(x=res, y=observed, 
+                   color=res, fill=res)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  scale_colour_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Number of Taxa") 
+
+p3
+
+
+ggplot(alpha_wide, aes(x=Extraction.Method.Simplified, y=observed, 
+                   color=Extraction.Method.Simplified)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  #scale_colour_manual(name = 'residual_type_binary',
+  #                   values = alpha(c(viridis(5)[1],
+  #                                    viridis(5)[2],
+  #                                    viridis(5)[4],
+  #                                    viridis(5)[3]), 1)) +
+  #scale_fill_manual(name = 'residual_type_binary',
+  #                   values = alpha(c(viridis(5)[1],
+  #                                    viridis(5)[2],
+  #                                    viridis(5)[4],
+  #                                    viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Number of Taxa") 
+
+ggplot(alpha_wide, aes(x=Country, y=observed, 
+                   color=Country)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  #scale_colour_manual(name = 'residual_type_binary',
+  #                   values = alpha(c(viridis(5)[1],
+  #                                    viridis(5)[2],
+  #                                    viridis(5)[4],
+  #                                    viridis(5)[3]), 1)) +
+  #scale_fill_manual(name = 'residual_type_binary',
+  #                   values = alpha(c(viridis(5)[1],
+  #                                    viridis(5)[2],
+  #                                    viridis(5)[4],
+  #                                    viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Number of Taxa") 
+
+```
+
+```{r}
+png("../IntermediaryDataForScripts/richness_all.png", width=600, height=300)
+p3
+dev.off()
+```
+
+```{r}
+model <- lm( alpha_wide$observed ~ alpha_wide$res )
+ANOVA <- aov(model)
+ 
+# Tukey test to study each pair of treatment :
+TUKEY <- TukeyHSD(x=ANOVA, 'alpha_wide$res', conf.level=0.95)
+
+TUKEY
+```
+
+
+```{r}
+p3 <- ggplot(alpha_wide, aes(x=Citation, y=observed, 
+                   color=Citation, fill=Citation)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=15), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(angle=30, vjust=1, hjust=1, size=8, face="italic", colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  scale_colour_manual(name = 'Citation',
+                     values = alpha(c(viridis(length(unique(alpha_wide$Citation)))), 1)) +
+  scale_fill_manual(name = 'Citation',
+                     values = alpha(c(viridis(length(unique(alpha_wide$Citation)))), 0.2)) +
+  xlab("Study") +
+  ylab("Number of Taxa")
+
+p3
+```
+
+
+
+```{r}
+alpha_wide_res <- alpha_wide[alpha_wide$Citation=="Dai et al (2020)",]
+```
+
+```{r}
+wt_shannon <- wilcox.test(alpha_wide_res$shannon[alpha_wide_res$residual_type_binary=="Residual Disinfectant"],
+       alpha_wide_res$shannon[alpha_wide_res$residual_type_binary=="No Residual Disinfectant"])
+wt_shannon
+
+wt_richness <- wilcox.test(alpha_wide_res$observed[alpha_wide_res$residual_type_binary=="Residual Disinfectant"],
+       alpha_wide_res$observed[alpha_wide_res$residual_type_binary=="No Residual Disinfectant"])
+wt_richness
+```
+
+```{r}
+p3 <- ggplot(alpha_wide_res, aes(x=Disinfectant_Residual, y=observed, 
+                   color=Disinfectant_Residual)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_text(aes(y=0, x=1), color="black", label=paste("p-value=", round(wt_richness$p.value, 4), sep=""), 
+            size=5.5, nudge_y = 0, nudge_x = 0.3,
+            check_overlap = T) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=24), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(angle=30, vjust=1, hjust=1, size=14, face="italic", colour="black"),
+        text = element_text(size = 14),
+        plot.margin = unit(c(1, 1, 1, 2.2),"lines"),
+        legend.position = "none") +
+  scale_shape_manual(name="Distribution System:",
+                     values=c(21,22,23)) +
+  scale_color_manual(name="Distribution System:",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 1)) + 
+  scale_fill_manual(name="Distribution System:",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 0.3)) +
+  xlab("") +
+  ylab("Richness") 
+
+p3
+
+p1 <- ggplot(alpha_wide_res, aes(x=residual_type_binary, y=shannon, 
+                   color=residual_type_binary, fill=residual_type_binary)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  geom_text(aes(y=0, x=1), color="black", label=paste("p-value=", round(wt_shannon$p.value, 4), sep=""), 
+            size=5.5, nudge_y = 0, nudge_x = 0.2,
+            check_overlap = T) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=24), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(angle=30, vjust=1, hjust=1, size=14, face="italic", colour="black"),
+        text = element_text(size = 14),
+        plot.margin = unit(c(1, 1, 1, 2.2),"lines"),
+        legend.position = "none") +
+  scale_shape_manual(name="",
+                     values=c(21,22,23)) +
+  scale_color_manual(name="",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 1)) + 
+  scale_fill_manual(name="",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 0.3)) + 
+  xlab("") +
+  ylab("Shannon Diversity") + ylim(c(0,7))
+
+p1
+```
+
+```{r}
+png("../IntermediaryDataForScripts/fig_5.png", width=500, height=500)
+gridExtra::grid.arrange(p3,p1,nrow=1)
+dev.off()
+```
+
+
+#######################################################
+# Looking at diversity metrics on not downsampled reads
+#######################################################
+
+by cluster, collapsed by sampling replicate, number of reads to a cluster, average contig length, and TPM
+```{r}
+head(read_coverage)
+```
+```{r}
+read_coverage_collapsed <- read_coverage %>%
+  select(sample, ReadCounts, Geneid, Length, contig) %>%
+  inner_join(metadata2, by=c("sample"="samples")) %>%
+  group_by(Geneid, true_samples, Assembly, Length, contig) %>%
+  dplyr::summarize(
+    total_mapped_reads=sum(ReadCounts)
+  )
+```
+
+## collapse clusters
+
+```{r}
+clusters <- read_tsv("merged_3000_trimmed_viruses_only_20211112_95-85_parsed.tsv", col_names=T)
+```
+
+```{r}
+reads_collapsed <- read_coverage_collapsed %>%
+  inner_join(clusters, by=c("contig", "Length"="length")) %>%
+  group_by(cluster, true_samples, Assembly) %>%
+  dplyr::summarize(
+    total_mapped_reads=sum(total_mapped_reads),
+    average_contig_length=mean(Length),
+    total_contig_length=sum(Length)
+  )
+```
+
+```{r}
+read_coverage_wide <- reads_collapsed %>%
+  pivot_wider(id_cols=c(cluster, average_contig_length, total_contig_length), 
+    names_from=true_samples, 
+    values_from=total_mapped_reads,
+    values_fill=0)
+```
+
+```{r}
+head(read_coverage_wide)
+```
+
+```{r}
+hist(log10(0.1+colSums(read_coverage_wide[,-c(1:3)])))
+```
+
+
+### Transpose the matrix to have samples as rows
+
+```{r}
+abund_table<-t(read_coverage_wide[,-c(1:3)])
+```
+
+Turn the abund_table matrix into a tibble.
+```{r}
+rn <- rownames(abund_table)
+abund_table <- as_tibble(abund_table)
+abund_table$samples <- rn
+```
+
+## Bind metadata and abund_table
+Some processing as well, including, delete and rows that have a "NA" for smaple
+and change the type of the column merged$total_reads to be numeric.
+```{r}
+metadata2_ts <- metadata2[!duplicated(metadata2$true_samples),]
+
+total_reads_collapsed <- metadata2 %>%
+  group_by(true_samples) %>%
+  dplyr::summarize(
+    total_mapped_reads=sum(total_reads)
+  )
+
+metadata2_ts <- metadata2_ts %>%
+  inner_join(total_reads_collapsed, by="true_samples")
+
+merged <- abund_table %>% 
+  inner_join(metadata2_ts, by=c("samples"="true_samples"))
+```
+
+```{r}
+merged[1:20,1:20]
+```
+
+```{r}
+alpha_wide <- merged[,c((ncol(merged)-43):ncol(merged))]
+alpha_wide$shannon <- vegan::diversity(merged[,-c((ncol(merged)-43):ncol(merged))], index = "shannon", MARGIN = 1)
+alpha_wide$observed <- vegan::specnumber(merged[,-c((ncol(merged)-43):ncol(merged))], MARGIN = 1)
+```
+
+```{r}
+alpha_wide$total_read_counts <- rowSums(merged[,-c((ncol(merged)-43):ncol(merged))])
+alpha_wide$proportion_viral_reads <- alpha_wide$total_read_counts/alpha_wide$total_mapped_reads*100
+
+
+alpha_wide$res <- "Suspected"
+alpha_wide$res[alpha_wide$Disinfectant_Residual=="Chlorine"] <- "Yes - Chlorine"
+alpha_wide$res[alpha_wide$Disinfectant_Residual=="Chloramine"] <- "Yes - Chloramine"
+alpha_wide$res[alpha_wide$Disinfectant_Residual=="No Residual"] <- "No"
+
+ggplot(alpha_wide, aes(x=total_mapped_reads, y=total_read_counts,
+                        color=res, fill=res,
+                       shape=res)) +
+  geom_point(alpha=0.5) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "right") +
+  xlab("Reads per Sample") +
+  ylab("Viral Reads per Sample") +
+  scale_x_log10() + scale_y_log10() +
+  scale_colour_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  scale_shape_manual(name = 'residual_type_binary',
+                     values=c(23,24,21,4)) 
+
+ggplot(alpha_wide, aes(x=total_read_counts, y=observed,
+                        color=res, fill=res,
+                       shape=res)) +
+  geom_point(alpha=0.5) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "right") +
+  xlab("Viral Reads per Sample") +
+  ylab("Number of Taxa") +
+  scale_x_log10() + scale_y_log10() +
+  scale_colour_manual(name = 'Disinfectant',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'Disinfectant',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  scale_shape_manual(name = 'Disinfectant',
+                     values=c(23,24,21,4)) 
+
+ggplot(alpha_wide, aes(x=total_mapped_reads, y=observed,
+                        color=res, fill=res,
+                       shape=res)) +
+  geom_point(alpha=0.5) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "right") +
+  xlab("Reads per Sample") +
+  ylab("Number of Taxa") +
+  scale_x_log10() + scale_y_log10() +
+  scale_colour_manual(name = 'Disinfectant',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'Disinfectant',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  scale_shape_manual(name = 'Disinfectant',
+                     values=c(23,24,21,4)) 
+
+ggplot(alpha_wide, aes(x=total_read_counts, y=shannon,
+                        color=res, fill=res,
+                       shape=res)) +
+  geom_point(alpha=0.5) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "right") +
+  xlab("Viral Reads per Sample") +
+  ylab("Shannon's Diversity") +
+  scale_x_log10() +
+  scale_colour_manual(name = 'Disinfectant',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'Disinfectant',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  scale_shape_manual(name = 'Disinfectant',
+                     values=c(23,24,21,4)) 
+
+
+```
+
+```{r}
+alpha_wide$taxa2readsratio <- alpha_wide$observed/(alpha_wide$total_read_counts/100000)
+
+ggplot(alpha_wide, aes(x=total_read_counts, y=taxa2readsratio,
+                        color=res, fill=res,
+                       shape=res)) +
+  geom_point(alpha=0.5) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "right") +
+  xlab("Viral Reads per Sample") +
+  ylab("Normalized Richness") +
+  scale_x_log10() +
+  scale_colour_manual(name = 'Disinfectant',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'Disinfectant',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  scale_shape_manual(name = 'Disinfectant',
+                     values=c(23,24,21,4)) 
+
+p1 <- ggplot(alpha_wide, aes(x=res, y=taxa2readsratio, 
+                   color=res, fill=res)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=10, colour = "black"),
+        axis.text.x  = element_text(size=10, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  scale_colour_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Normalized Richness") +
+  scale_y_log10()
+
+p1
+
+ggplot(alpha_wide, aes(x=res, y=total_read_counts, 
+                   color=res, fill=res)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  scale_colour_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Total Viral Reads") +
+  scale_y_log10()
+
+ggplot(alpha_wide, aes(x=res, y=total_reads, 
+                   color=res, fill=res)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  scale_colour_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Total Reads") +
+  scale_y_log10()
+
+ggplot(alpha_wide, aes(x=res, y=proportion_viral_reads, 
+                   color=res, fill=res)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=10, colour = "black"),
+        axis.text.x  = element_text(size=10, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  scale_colour_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Percent Viral Reads") +
+  scale_y_log10()
+
+```
+
+```{r}
+model <- lm( log10(alpha_wide$proportion_viral_reads) ~ alpha_wide$res )
+ANOVA <- aov(model)
+ 
+# Tukey test to study each pair of treatment :
+TUKEY <- TukeyHSD(x=ANOVA, 'alpha_wide$res', conf.level=0.95)
+
+TUKEY
+```
+
+
+```{r}
+png("all_samples_taxa_per_thousand_viral_reads.png", width=6, height=4, units="in", res=400)
+
+p1
+
+dev.off() 
+```
+
+```{r}
+mean(alpha_wide$taxa2readsratio)
+sd(alpha_wide$taxa2readsratio)
+
+mean(alpha_wide$observed)
+sd(alpha_wide$observed)
+```
+
+
+
+```{r}
+model <- lm( alpha_wide$taxa2readsratio ~ alpha_wide$res )
+ANOVA <- aov(model)
+ 
+# Tukey test to study each pair of treatment :
+TUKEY <- TukeyHSD(x=ANOVA, 'alpha_wide$res', conf.level=0.95)
+
+TUKEY
+```
+
+```{r}
+alpha_wide$max_shannon <- -log(1/alpha_wide$total_read_counts)
+alpha_wide$shannon_ratio <- alpha_wide$shannon/alpha_wide$max_shannon
+
+ggplot(alpha_wide, aes(x=res, y=shannon_ratio, 
+                   color=res, fill=res)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  scale_colour_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[2],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Ratio of Shannon to Max Possible Shannon") 
+
+```
+
+```{r}
+mean(alpha_wide$shannon_ratio)
+sd(alpha_wide$shannon_ratio)
+
+range(alpha_wide$shannon)
+
+mean(alpha_wide$shannon[alpha_wide$total_read_counts>100000])
+sd(alpha_wide$shannon_ratio[alpha_wide$total_read_counts>100000])
+
+mean(alpha_wide$shannon)
+```
+
+### Just looking at Dai Samples
+
+```{r}
+alpha_wide_res <- alpha_wide %>% 
+  filter(Citation=="Dai et al (2020)") %>%
+  filter(res!="Yes - Chloramine") %>%
+  filter(`Koppen Zone`=="Cfb")
+```
+
+```{r}
+wt_shannon <- wilcox.test(alpha_wide_res$shannon[alpha_wide_res$residual_type_binary=="Residual Disinfectant"],
+       alpha_wide_res$shannon[alpha_wide_res$residual_type_binary=="No Residual Disinfectant"])
+wt_shannon
+
+wt_richness <- wilcox.test(alpha_wide_res$observed[alpha_wide_res$residual_type_binary=="Residual Disinfectant"],
+       alpha_wide_res$observed[alpha_wide_res$residual_type_binary=="No Residual Disinfectant"])
+wt_richness
+
+wt_ratio <- wilcox.test(alpha_wide_res$taxa2readsratio[alpha_wide_res$residual_type_binary=="Residual Disinfectant"],
+       alpha_wide_res$taxa2readsratio[alpha_wide_res$residual_type_binary=="No Residual Disinfectant"])
+wt_ratio
+
+wt_ratio_shannon <- wilcox.test(alpha_wide_res$shannon_ratio[alpha_wide_res$residual_type_binary=="Residual Disinfectant"],
+       alpha_wide_res$shannon_ratio[alpha_wide_res$residual_type_binary=="No Residual Disinfectant"])
+wt_ratio_shannon
+
+wt_ratio_viral <- wilcox.test(alpha_wide_res$proportion_viral_reads[alpha_wide_res$residual_type_binary=="Residual Disinfectant"],
+       alpha_wide_res$proportion_viral_reads[alpha_wide_res$residual_type_binary=="No Residual Disinfectant"])
+wt_ratio_viral
+```
+
+```{r}
+ggplot(alpha_wide_res, aes(x=res, y=taxa2readsratio, 
+                   color=res, fill=res)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  scale_colour_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Taxa Per Thousand Viral Reads") +
+  scale_y_log10() +
+  geom_text(aes(y=0.15, x=1), color="black", label=paste("p-value=", round(wt_ratio$p.value, 9), sep=""), 
+            size=5.5, nudge_y = 0, nudge_x = 0,
+            check_overlap = T)
+
+ggplot(alpha_wide_res, aes(x=res, y=shannon_ratio, 
+                   color=res, fill=res)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  scale_colour_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Ratio of Shannon to Max Possible Shannon") +
+  scale_y_log10() +
+  geom_text(aes(y=0.15, x=1), color="black", label=paste("p-value=", round(wt_ratio_shannon$p.value, 9), sep=""), 
+            size=5.5, nudge_y = 0, nudge_x = 0,
+            check_overlap = T)
+
+
+ggplot(alpha_wide_res, aes(x=res, y=total_read_counts, 
+                   color=res, fill=res)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  scale_colour_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Viral Reads") +
+  scale_y_log10() 
+
+ggplot(alpha_wide_res, aes(x=res, y=total_mapped_reads, 
+                   color=res, fill=res)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=14, colour = "black"),
+        axis.text.x  = element_text(size=14, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  scale_colour_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[4],
+                                      viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Total Reads") +
+  scale_y_log10() 
+```
+
+
+
+```{r}
+alpha_wide_res$binary <- "No"
+alpha_wide_res$binary[grepl("Yes", alpha_wide_res$res)] <- "Yes"
+```
+
+```{r}
+p3 <- ggplot(alpha_wide_res, aes(x=binary, y=taxa2readsratio, 
+                   color=binary, fill=binary)) +
+  geom_boxplot() +
+  geom_jitter(width=0.1, size=1, alpha=0.4) +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=12), 
+        axis.text.y = element_text(size=8, colour = "black"),
+        axis.text.x  = element_text(size=10, colour="black"),
+        text = element_text(size = 10),
+        plot.margin = unit(c(1, 0.3, 1, 0.7),"lines"),
+        legend.position = "none") +
+  scale_shape_manual(name="Distribution System:",
+                     values=c(21,22,23)) +
+  scale_color_manual(name="Distribution System:",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 1)) + 
+  scale_fill_manual(name="Distribution System:",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 0.3)) +
+  xlab("") +
+  ylab("Normalized Richness") 
+
+p3
+
+p1 <- ggplot(alpha_wide_res, aes(x=binary, y=shannon_ratio, 
+                   color=binary, fill=binary)) +
+  geom_jitter(width=0.1, size=1, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=12), 
+        axis.text.y = element_text(size=8, colour = "black"),
+        axis.text.x  = element_text(size=10, colour="black"),
+        text = element_text(size = 10),
+        plot.margin = unit(c(1, 0.3, 1, 0.7),"lines"),
+        legend.position = "none") +
+  scale_shape_manual(name="",
+                     values=c(21,22,23)) +
+  scale_color_manual(name="",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 1)) + 
+  scale_fill_manual(name="",
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 0.3)) + 
+  xlab("") +
+  ylab("Shannon Evenness Index")
+
+p1
+```
+
+```{r}
+png("fig_5.png", width=3.2, height=3.2, units="in", res=400)
+gridExtra::grid.arrange(p3,p1,nrow=1)
+dev.off()
+```
+
+
+```{r}
+ggplot(alpha_wide_res, aes(x=res, y=proportion_viral_reads, 
+                   color=res, fill=res)) +
+  geom_jitter(width=0.1, size=2, alpha=0.4) +
+  geom_boxplot() +
+  theme(panel.background = element_blank(), 
+        axis.line = element_line(colour = "black"), 
+        panel.border = element_rect(colour = "black", fill=NA, size=1), 
+        axis.title=element_text(size=16), 
+        axis.text.y = element_text(size=10, colour = "black"),
+        axis.text.x  = element_text(size=10, colour="black"),
+        plot.margin = unit(c(1, 1, 1, 1),"lines"),
+        legend.position = "none") +
+  scale_colour_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 1)) +
+  scale_fill_manual(name = 'residual_type_binary',
+                     values = alpha(c(viridis(5)[1],
+                                      viridis(5)[3]), 0.2)) +
+  xlab("Residual Disinfectant") +
+  ylab("Percent Viral Reads") +
+  scale_y_log10()
+```
+

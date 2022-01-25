@@ -1,0 +1,851 @@
+---
+title: "Drinking Water Meta-Analysis ORF Counts Processing"
+output: html_notebook
+---
+
+```{r}
+library(DESeq2)
+library(tidyr)
+library(readr)
+library(dplyr)
+library(ggplot2)
+library(viridis)
+library(RColorBrewer)
+library(pheatmap)
+library(vegan)
+library(ggthemes)
+library(dendextend)
+library(stringr)
+```
+
+# Imports
+
+## import read coverage data
+```{r}
+coverage <- read_tsv("merged_viral_ORF_count.txt", col_names = T)
+colnames(coverage)[ncol(coverage)] <- "Counts"
+coverage$ComboId <- gsub("FeatureCountsORFs/", "", coverage$ComboId)
+coverage$ComboId <- gsub("_viral_ORF_count.txt", "", coverage$ComboId)
+coverage <- separate(coverage, col="ComboId", into=c("Assembly", "Sample"), sep = "--", remove = F)
+coverage$Chr <- gsub("\\.", "_", coverage$Chr)
+```
+
+```{r}
+head(coverage)
+```
+`
+
+
+## import DRAM annotations
+```{r}
+annotations <- read_tsv("merged_annotations.tsv", col_names = T)
+colnames(annotations)[2] <- "Geneid"
+colnames(annotations)[4] <- "UniqContig"
+colnames(annotations)[5] <- "Start"
+colnames(annotations)[7] <- "End"
+annotations <- annotations[,-1]
+annotations <- separate(annotations, col="UniqContig", into=c("Assembly", "Contig"), sep = "--", remove = F)
+
+```
+
+```{r}
+head(annotations)
+```
+
+
+## import sample metadata
+```{r}
+metadata2 <- read_tsv("../PaperDrafts/IntermediaryDataForScripts/updated_processed_all_samples_metadata_20210908.txt", col_names = T)
+```
+
+
+# Get Counts by KEGG
+
+```{r}
+annotation_coverage <- right_join(annotations, coverage, 
+                                 by=c("Geneid", "Assembly"))
+```
+
+```{r}
+annotation_coverage[(annotation_coverage$UniqContig %in% "SRR6797136--NODE_313_length_35002_cov_69_726271||full"),]
+```
+- this contig is in the most frequently occurring cluster
+- interestingly it also has K07638 on it (the osmolarity sensor histidine kinase that might be involved in biofilm formation)
+- blasting it
+
+```{r}
+unique(annotation_coverage$pfam_hits[(annotation_coverage$UniqContig %in% "SRR6797136--NODE_313_length_35002_cov_69_726271||full")])
+```
+
+
+```{r}
+head(annotation_coverage[(annotation_coverage$UniqContig %in% "London_Maria--London_Maria_0000640||full"),])
+```
+
+are there any nitrogen metabolism related genes in the full virome?
+```{r}
+annotation_coverage[grepl("K00370", annotation_coverage$kegg_id),]
+```
+
+```{r}
+annotation_coverage[grepl("K04488", annotation_coverage$kegg_id),]
+```
+
+
+
+this cell was getting the clusters for those contigs that had one of the differentially abundant genes on it
+```{r}
+KO_K07638 <- unique(annotation_coverage$UniqContig[grep("K07638", annotation_coverage$kegg_id)])
+
+clusters[clusters$contig %in% KO_K07638,]
+```
+
+```{r}
+annotation_coverage[(annotation_coverage$UniqContig %in% "London_Maria--London_Maria_0000640||full") & annotation_coverage$Counts>0,]
+
+unique(annotation_coverage$kegg_hit[(annotation_coverage$UniqContig %in% "London_Maria--London_Maria_0000640||full") & annotation_coverage$Counts>0])
+unique(annotation_coverage$vogdb_description[(annotation_coverage$UniqContig %in% "London_Maria--London_Maria_0000640||full") & annotation_coverage$Counts>0])
+unique(annotation_coverage$pfam_hits[(annotation_coverage$UniqContig %in% "London_Maria--London_Maria_0000640||full") & annotation_coverage$Counts>0])
+```
+
+considering if can find interesting drinking water genes in the full virome
+```{r}
+chlorine_annots <- read_tsv("../PaperDrafts/IntermediaryDataForScripts/chlorine_stress_genes_log2F.tsv", col_names = T)
+chlorine_annots <- chlorine_annots[,1:4]
+chlorine_annots$`KEGG Pathway`[nrow(chlorine_annots)] <- "Chaperones and folding catalysts"
+chlorine_annots$`KEGG Pathway`[chlorine_annots$`KEGG Pathway`=="glutathione metabolism"] <- "Glutathione metabolism"
+```
+
+```{r}
+head(chlorine_annots)
+
+table(chlorine_annots$KEGG %in% res_deseq_t$kegg)
+```
+
+```{r}
+unique(annotation_coverage$Assembly[annotation_coverage$kegg_id %in% chlorine_annots$KEGG])
+```
+
+```{r}
+nitrogen_KOs <- c("K04748",
+ "K02448", "K02305",
+ "K04561", "K00368",
+ "K00362", "K00366",
+ "K00372", "K00371",
+ "K00370", "K10535",
+ "K10946", "K10945",
+ "K10944")
+
+annotation_coverage[annotation_coverage$kegg_id %in% nitrogen_KOs,]
+```
+
+
+
+
+
+```{r}
+head(annotation_coverage)
+```
+
+```{r}
+table(is.na(annotation_coverage$pfam_hits))
+```
+
+
+D=only hit to PFAM
+```{r}
+annotation_coverage_pfam <- annotation_coverage[annotation_coverage$rank!="E",]
+```
+
+```{r}
+annotation_coverage_pfam <- annotation_coverage_pfam %>% 
+    separate(pfam_hits, into="pfam_hits", sep=";")
+```
+
+```{r}
+head(sort(table(annotation_coverage_pfam$pfam_hits), decreasing=T), n=20)
+```
+
+```{r}
+orf_summary <- tibble(pfam=names(table(annotation_coverage_pfam$pfam_hits)),
+                      Frequency=table(annotation_coverage_pfam$pfam_hits))
+
+orf_summary$Proportion_pfam <- orf_summary$Frequency/(nrow(annotation_coverage_pfam))
+
+orf_summary <- orf_summary[order(orf_summary$Proportion_pfam, decreasing=T),] 
+```
+
+```{r}
+orf_summary$pfam[24] <- "Protein of unknown function [PF11753.9]"
+```
+
+```{r}
+orf_summary$pfam <- factor(orf_summary$pfam, levels=orf_summary$pfam[order(orf_summary$Proportion_pfam)])
+```
+
+```{r}
+head(orf_summary, n=50)
+```
+
+```{r}
+orf_summary_head <- orf_summary[1:33,]
+```
+
+
+
+```{r}
+orf_summary_head$gene_type <- c("phage non-structural", "phage structural", "phage non-structural",
+                                "phage non-structural", "phage non-structural", "phage structural",
+                                "phage non-structural", "phage non-structural", "phage non-structural",
+                                "phage non-structural", "phage structural", "phage non-structural",
+                                "phage non-structural", "phage non-structural", "phage non-structural",
+                                "phage non-structural", "phage structural", "phage non-structural",
+                                "phage non-structural", "phage non-structural", "phage non-structural",
+                                "phage non-structural", "unidentified", "unidentified",
+                                "phage non-structural", "phage structural", "phage non-structural",
+                                "phage structural", "unidentified", "phage non-structural",
+                                "phage non-structural", "phage structural", "unidentified") 
+```
+
+```{r}
+pal <- ggthemes::tableau_color_pal(palette="Tableau 10", type="regular")
+```
+
+
+```{r}
+pfam_abund <- ggplot(orf_summary_head, 
+                        aes(x=Proportion_pfam, y=pfam, 
+                            color=gene_type, fill=gene_type)) + 
+  geom_bar(stat="identity") + 
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(),
+        panel.border = element_rect(colour = "white", fill=NA, size=1),
+        axis.title=element_text(size=20),
+        axis.ticks=element_blank(),
+        legend.key=element_blank(),
+        legend.position="bottom",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        text=element_text(size=10)) +
+        #panel.grid.major.x=element_line(color="grey")) +
+  guides(size="none") + xlab("Proportion") + ylab("") +
+  scale_color_manual(name="",
+                     values = alpha(pal(3), 1)) + 
+  scale_fill_manual(name="",
+                     values = alpha(pal(3), 0.3))
+
+pfam_abund
+```
+
+```{r}
+png("top_pfam_proportion.png", width=6, height=10, units="in", res=300)
+pfam_abund     
+dev.off()
+```
+
+
+```{r}
+head(sort(table(annotation_coverage_pfam$vogdb_description), decreasing=T), n=20)
+```
+
+
+```{r}
+head(annotation_coverage_pfam)
+```
+### VOG database categories
+VIRUS STRUCTURE AND REPLICATION
+ [Xr] Virus replication
+ [Xs] Virus structure
+
+VIRUS HOST INTERACTION
+ [Xh] Virus protein with function beneficial for the host
+ [Xp] Virus protein with function beneficial for the virus
+
+POORLY CHARACTERIZED
+ [Xu] Function unknown
+
+```{r}
+length(table(annotation_coverage_pfam$pfam_hits))
+```
+
+
+
+C= forward hit only to KEGG or UniRef90 => only used KEGG, so this just gives the contigs with a KEGG annotation from DRAM
+```{r}
+annotation_coverage_kegg <- annotation_coverage[annotation_coverage$rank=="C",]
+```
+
+```{r}
+annotation_coverage_kegg <- annotation_coverage_kegg %>% 
+    separate(kegg_id, into="kegg_id", sep=",")
+```
+only 5% of genes had multiple KEGG annotations and most were duplicates of the same KEGG, so just took first.
+
+
+```{r}
+head(sort(table(annotation_coverage_kegg$kegg_id)/nrow(annotation_coverage_kegg), decreasing=T), n=50)
+```
+
+```{r}
+orf_summary <- tibble(KO=names(table(annotation_coverage_kegg$kegg_id)),
+                      Frequency=table(annotation_coverage_kegg$kegg_id))
+
+orf_summary$Proportion_KO <- orf_summary$Frequency/nrow(annotation_coverage_kegg)
+
+orf_summary <- orf_summary[order(orf_summary$Proportion_KO, decreasing=T),] 
+
+orf_summary$KO <- factor(orf_summary$KO, levels=orf_summary$KO[order(orf_summary$Proportion_KO)])
+```
+
+```{r}
+ko_abund <- ggplot(orf_summary[1:3,], 
+                        aes(x=Proportion_KO, y=KO)) + 
+  geom_bar(stat="identity") + 
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(),
+        panel.border = element_rect(colour = "grey", fill=NA, size=1),
+        axis.title=element_text(size=30),
+        axis.ticks=element_blank(),
+        legend.key=element_blank(),
+        legend.position="right",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        text=element_text(size=10)) +
+  guides(size="none") + xlab("KO Proportion") + ylab("") 
+
+ko_abund
+```
+```{r}
+svg
+```
+
+
+
+
+
+
+
+
+# Looking at Nitrogen Genes
+
+
+
+# Making some summary figures of KO abundance [continue below for making datatables]
+
+## Faceted by Pathway Modules
+```{r}
+orf_summary <- tibble(KO=names(table(annotation_coverage_kegg$kegg_id)),
+                      Frequency=table(annotation_coverage_kegg$kegg_id))
+
+orf_summary$Proportion_KO <- orf_summary$Frequency/nrow(annotation_coverage_kegg)
+```
+
+```{r}
+orf_abundance_summary <- annotation_coverage_kegg %>%
+    group_by(kegg_id) %>%
+    dplyr::summarize(
+      across(starts_with("Counts"), sum)
+    ) 
+
+orf_abundance_summary$Proportion_Abund <- orf_abundance_summary$Counts/sum(orf_abundance_summary$Counts)
+```
+
+## KO hierarchy info
+```{r}
+library(data.table)
+
+kegg_metabolism <- readLines("kegg_metabolism.txt")
+kegg_metabolism <- str_split(kegg_metabolism, pattern = "\t", n = 4)
+kegg_metabolism <- data.frame(kegg_metabolism)
+kegg_metabolism <- data.frame(t(kegg_metabolism))
+rownames(kegg_metabolism) <- NULL
+temp <- data.frame(tstrsplit(kegg_metabolism[,4], split = "\t"))
+ kegg_metabolism <- cbind.data.frame(kegg_metabolism[,1:3], temp)
+colnames(kegg_metabolism) <- c("Level1", "Level2", "Level3", "KO", "Level4")
+```
+
+```{r}
+orf_summary <- inner_join(orf_summary, orf_abundance_summary, by=c("KO"="kegg_id"))
+orf_summary <- left_join(orf_summary, kegg_metabolism, by=c("KO"))
+
+orf_summary <- orf_summary[!base::duplicated(orf_summary$KO),]
+```
+
+```{r}
+reads_vs_freq <- ggplot(orf_summary[!(is.na(orf_summary$Level2)),], 
+                        aes(x=Proportion_KO, y=Proportion_Abund)) + 
+  geom_point(aes(colour = Level2, fill = Level2), size=2, alpha=0.2) +
+  geom_segment(aes(x=0, y=0,
+               xend=0.0051, yend=0.0051), color="grey") + 
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(),
+        panel.border = element_rect(colour = "grey", fill=NA, size=1),
+        axis.title=element_text(size=30),
+        axis.text=element_blank(),
+        axis.ticks=element_blank(),
+        legend.key=element_blank(),
+        legend.position="right",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        text=element_text(size=10)) +
+  guides(size="none") + xlab("KO Occurrence Frequency") + ylab("KO Read Count Abundance") +
+  facet_wrap(~Level2, nrow=3)
+
+reads_vs_freq
+```
+
+```{r}
+orf_summary_high <- orf_summary[orf_summary$Proportion_KO>0.001 | orf_summary$Proportion_Abund.x>0.001,]
+
+write_tsv(orf_summary_high, file="most_abundant_KEGGs.tsv")
+```
+
+
+## Merging by Pathway Modules
+
+```{r}
+annotation_coverage_level2 <- inner_join(annotation_coverage_kegg, kegg_metabolism, by=c("kegg_id"="KO"))
+
+level2_summary <- tibble(PathwayModule=names(table(annotation_coverage_level2$Level2)),
+                      Frequency=table(annotation_coverage_level2$Level2))
+
+level2_summary$Proportion_KO <- level2_summary$Frequency/nrow(annotation_coverage_level2)
+```
+
+```{r}
+level2_abundance_summary <- annotation_coverage_level2 %>%
+    group_by(Level2) %>%
+    dplyr::summarize(
+      across(starts_with("Counts"), sum)
+    ) 
+
+level2_abundance_summary$Proportion_Abund <- level2_abundance_summary$Counts/sum(level2_abundance_summary$Counts)
+```
+
+```{r}
+level2_summary <- inner_join(level2_summary, level2_abundance_summary, by=c("PathwayModule"="Level2"))
+```
+
+```{r}
+reads_vs_freq <- ggplot(level2_summary, 
+                        aes(x=Proportion_KO, y=Proportion_Abund)) + 
+  geom_point(aes(colour = PathwayModule, fill = PathwayModule), size=2) +
+  geom_segment(aes(x=0, y=0,
+               xend=0.5, yend=0.5), color="grey") + 
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(),
+        panel.border = element_rect(colour = "grey", fill=NA, size=1),
+        axis.title=element_text(size=10),
+        legend.key=element_blank(),
+        legend.position="right",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        text=element_text(size=10)) +
+  guides(size="none") + xlab("KO Occurrence Frequency") + ylab("KO Read Count Abundance")
+
+reads_vs_freq
+```
+
+### Plotting KO Frequency in my ORFs compared to the Database
+```{r}
+drinking_water_level2 <- tibble(KO=names(table(annotation_kegg$kegg_id)))
+drinking_water_level2 <- inner_join(drinking_water_level2, kegg_metabolism, by="KO")
+
+level2_comp <- tibble(
+  level2 = names(table(drinking_water_level2$Level2)),
+  level2_KOs = table(drinking_water_level2$Level2),
+  numKOs_database = table(kegg_metabolism$Level2)[c(2,4,5,6,8,9,10,12,13)]
+)
+
+level2_comp$drinkingwaterproportion <- level2_comp$level2_KOs/nrow(drinking_water_level2)
+level2_comp$databaseproportion <- level2_comp$numKOs_database/nrow(kegg_metabolism[kegg_metabolism$Level_2 %in% level2_comp$level2,])
+
+```
+
+```{r}
+ggplot(level2_comp, 
+                        aes(x=drinkingwaterproportion, y=databaseproportion)) + 
+  geom_point(aes(colour = level2, fill = level2), size=2) +
+  geom_segment(aes(x=0, y=0,
+               xend=0.5, yend=0.5), color="grey") + 
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(),
+        panel.border = element_rect(colour = "grey", fill=NA, size=1),
+        axis.title=element_text(size=12),
+        legend.key=element_blank(),
+        legend.position="right",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        text=element_text(size=10)) +
+  guides(size="none") + xlab("KO Occurrence Frequency Drinking Water") + ylab("KO Occurrence Frequency Database")
+
+```
+
+
+# continuing with preparing files
+```{r}
+annotation_kegg <- annotation_coverage_kegg %>%
+    group_by(kegg_id,Sample) %>%
+    dplyr::summarize(
+      across(starts_with("Counts"), sum)
+    ) 
+```
+
+make wide
+```{r}
+annotation_kegg <- annotation_kegg %>%
+  pivot_wider(names_from=Sample, values_from=Counts, values_fill=0)
+```
+
+
+
+
+# Get Tables for DESeq2
+
+### Count_data with only the Dai samples
+```{r}
+count_data <- as.matrix(annotation_kegg[,c(grep("SRX", colnames(annotation_kegg)))])
+rownames(count_data) <- as.character(annotation_kegg$kegg_id)
+count_data <- count_data[!is.na(rownames(count_data)),] 
+colnames(count_data) <- gsub("read_counts_", "", colnames(count_data))
+```
+
+
+### keep only the samples in the Cfa region, and not from site D7 or D9
+```{r}
+metadata_filt <- metadata2 %>%
+    filter(samples %in% colnames(count_data)) %>%
+    filter(Citation=="Dai et al (2020)") %>% 
+    filter(`Koppen Zone`=="Cfb") %>% 
+    filter(Assembly!="D9") %>%
+    filter(Assembly!="D7") %>%
+    as.matrix()
+rownames(metadata_filt) <- as.character(metadata_filt[,colnames(metadata_filt)=="samples"])
+metadata_filt <- metadata_filt[rownames(metadata_filt) %in% colnames(count_data),]
+```
+
+```{r}
+count_data <- count_data[,colnames(count_data) %in% rownames(metadata_filt)]
+```
+
+### remove any KEGGs that aren't found in the Dai samples
+```{r}
+count_data <- count_data[!rowSums(count_data)==0,]
+```
+
+```{r}
+count_data <- count_data[,order(colnames(count_data), decreasing=T)]
+metadata_filt <- metadata_filt[order(rownames(metadata_filt), decreasing=T),]
+```
+
+
+```{r}
+write.table(count_data, "orf_counts_for_deseq.tsv", sep="\t")
+write.table(metadata_filt, "orf_medatadata_for_deseq.tsv", sep="\t")
+```
+
+```{r}
+#Define the annotation color for columns and rows
+annotation_col = data.frame(
+    DWDS = metadata_filt[,colnames(metadata_filt)=="Assembly"],
+    check.names = FALSE
+)
+rownames(annotation_col) <- colnames(count_data)
+
+#annotation_row <- annotation_col
+#rownames(annotation_row) <- rownames(annotation_col)
+
+# ann_color should be named vectors
+
+pal <- ggthemes::tableau_color_pal(palette="Tableau 20", type="regular")
+
+assembly_col <- pal(length(unique(metadata_filt[,colnames(metadata_filt)=="Assembly"])))
+names(assembly_col) <- unique(metadata_filt[,colnames(metadata_filt)=="Assembly"])
+
+ann_colors = list(
+    `DWDS` = assembly_col
+)
+
+pheatmap(log10(0.1+count_data),
+        annotation_col = annotation_col, 
+        annotation_colors = ann_colors,
+        annotation_names_col = T,
+        color = c(0, rev(magma(256))), border_color = NA,
+        clustering_method = "ward.D"
+
+)
+```
+
+# Making same read vs frequency plots for the residual vs no residual samples
+```{r}
+rownames_keggs <- rownames(count_data)
+count_data <- as_tibble(count_data)
+count_data$kegg_id <- rownames_keggs
+
+count_data_KO_database <- count_data %>%
+  left_join(kegg_metabolism, by=c("kegg_id"="KO"))
+
+count_data_KO_database <- count_data_KO_database[!base::duplicated(count_data_KO_database$kegg_id),]
+```
+
+```{r}
+metadata_filt <- as_tibble(metadata_filt)
+```
+
+
+```{r}
+count_data_KO_database <- count_data_KO_database[!is.na(count_data_KO_database$Level2),]
+
+count_data_KO_database_res <- count_data_KO_database %>%
+  select("kegg_id", "Level2", metadata_filt$samples[metadata_filt$Disinfectant_Residual=="Chlorine"])
+count_data_KO_database_res <- count_data_KO_database_res[!rowSums(count_data_KO_database_res[,-c(1,2)])==0,]
+
+count_data_KO_database_no_res <- count_data_KO_database %>%
+  select("kegg_id", "Level2", metadata_filt$samples[metadata_filt$Disinfectant_Residual=="No Residual"])
+count_data_KO_database_no_res <- count_data_KO_database_no_res[!rowSums(count_data_KO_database_no_res[,-c(1,2)])==0,]
+
+```
+
+```{r}
+level2_comp <- tibble(
+  level2 = names(table(count_data_KO_database_res$Level2)),
+  KO_freq_res = as.numeric(table(count_data_KO_database_res$Level2))/nrow(count_data_KO_database_res),
+  KO_freq_no_res = c(as.numeric(table(count_data_KO_database_no_res$Level2))[1:6], 0,
+                    as.numeric(table(count_data_KO_database_no_res$Level2))[7])/nrow(count_data_KO_database_no_res)
+)
+```
+
+```{r}
+res_vs_no <- ggplot(level2_comp, aes(x=KO_freq_res, y=KO_freq_no_res)) + 
+  geom_point(aes(colour = level2, fill = level2), size=7) +
+  geom_segment(aes(x=0, y=0,
+               xend=0.41, yend=0.41), color="grey") + 
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(),
+        panel.border = element_rect(colour = "grey", fill=NA, size=1),
+        axis.title=element_text(size=30),
+        legend.key=element_blank(),
+        legend.position="right",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        text=element_text(size=22)) +
+  guides(size="none") + 
+  xlab("KO Occurrence - Residual") + ylab("KO Occurrence - No Residual") +
+  scale_color_manual(name="",
+                     values = alpha(pal(8), 1)) + 
+  scale_fill_manual(name="",
+                     values = alpha(pal(8), 0.3))
+
+res_vs_no
+```
+
+```{r}
+count_data_KO_database_res_level2 <- count_data_KO_database_res %>%
+  select(Level2, starts_with("SRX")) %>%
+  group_by(Level2) %>%
+  dplyr::summarize(
+      across(starts_with("SRX"), sum)
+    ) 
+level2_comp$reads_res <- rowSums(count_data_KO_database_res_level2[!is.na(count_data_KO_database_res_level2$Level2),-1])/sum(count_data_KO_database_res_level2[!is.na(count_data_KO_database_res_level2$Level2),-1])
+
+
+count_data_KO_database_no_res_level2 <- count_data_KO_database_no_res %>%
+  select(Level2, starts_with("SRX")) %>%
+  group_by(Level2) %>%
+  dplyr::summarize(
+      across(starts_with("SRX"), sum)
+    ) 
+
+level2_reads_no_res <- rowSums(count_data_KO_database_no_res_level2[!is.na(count_data_KO_database_no_res_level2$Level2),-1])/sum(count_data_KO_database_no_res_level2[!is.na(count_data_KO_database_no_res_level2$Level2),-1])
+
+level2_comp$reads_no_res <- c(level2_reads_no_res[1:6], 0, level2_reads_no_res[7])
+```
+
+
+```{r}
+pal <- ggthemes::tableau_color_pal(palette="Tableau 10", type="regular")
+
+res_vs_no <- ggplot(level2_comp, aes(x=reads_res, y=reads_no_res)) + 
+  geom_point(aes(colour = level2, fill = level2), size=3) +
+  geom_segment(aes(x=0, y=0,
+               xend=0.41, yend=0.41), color="grey") + 
+  theme(panel.background = element_blank(), 
+        axis.line = element_blank(),
+        panel.border = element_rect(colour = "grey", fill=NA, size=1),
+        axis.title=element_text(size=15),
+        legend.key=element_blank(),
+        legend.position="right",
+        legend.background = element_blank(),
+        legend.key.size = unit(.8, "line"),
+        text=element_text(size=10)) +
+  guides(size="none") + 
+  xlab("Read Abundance - Residual") + ylab("Read Abundance - No Residual") +
+  scale_color_manual(name="",
+                     values = alpha(pal(8), 1)) + 
+  scale_fill_manual(name="",
+                     values = alpha(pal(8), 0.3))
+
+res_vs_no
+```
+
+
+# Get Sevillano contigs
+
+### keep only Sevillano sample metadata
+```{r}
+metadata_filt <- metadata2 %>%
+    filter(Citation=="Sevillano et al (preprint)") %>% 
+    as.matrix()
+rownames(metadata_filt) <- as.character(metadata_filt[,colnames(metadata_filt)=="true_samples"])
+```
+
+### Count_data with only the Sevillano samples
+```{r}
+count_data <- as.matrix(annotation_kegg[,colnames(annotation_kegg) %in% rownames(metadata_filt)])
+rownames(count_data) <- as.character(annotation_kegg$kegg_id)
+count_data <- count_data[!is.na(rownames(count_data)),] 
+colnames(count_data) <- gsub("read_counts_", "", colnames(count_data))
+```
+
+### remove any KEGGs that aren't found in the Sevillano samples
+```{r}
+count_data <- count_data[!rowSums(count_data)==0,]
+```
+
+```{r}
+count_data <- count_data[,order(colnames(count_data), decreasing=T)]
+metadata_filt <- metadata_filt[order(rownames(metadata_filt), decreasing=T),]
+```
+
+
+```{r}
+write.table(count_data, "orf_counts_for_deseq_sevillano.tsv", sep="\t")
+write.table(metadata_filt, "orf_medatadata_for_deseq_sevillano.tsv", sep="\t")
+```
+
+```{r}
+#Define the annotation color for columns and rows
+annotation_col = data.frame(
+    DWDS = metadata_filt[,colnames(metadata_filt)=="Samples"],
+    check.names = FALSE
+)
+rownames(annotation_col) <- colnames(count_data)
+
+#annotation_row <- annotation_col
+#rownames(annotation_row) <- rownames(annotation_col)
+
+# ann_color should be named vectors
+
+pal <- ggthemes::tableau_color_pal(palette="Tableau 20", type="regular")
+
+assembly_col <- pal(length(unique(metadata_filt[,colnames(metadata_filt)=="Samples"])))
+names(assembly_col) <- unique(metadata_filt[,colnames(metadata_filt)=="Samples"])
+
+ann_colors = list(
+    `DWDS` = assembly_col
+)
+
+pheatmap(log10(0.1+count_data),
+        annotation_col = annotation_col, 
+        annotation_colors = ann_colors,
+        annotation_names_col = T,
+        color = c(0, rev(magma(256))), border_color = NA,
+        clustering_method = "ward.D"
+
+)
+```
+
+
+
+
+
+
+
+############ ARGs #############
+```{r}
+ARGs <- read_tsv("merge_deeparg_genes_output.out.mapping.ARG.tsv")
+```
+
+make wide
+```{r}
+arg_wide <- ARGs[,c(1,2,ncol(ARGs))]
+arg_wide <- arg_wide %>%
+  pivot_wider(names_from=Assembly, values_from=counts, values_fill=0, values_fn=sum)
+```
+
+```{r}
+head(ARGs)
+```
+```{r}
+ANI_clusters <- read_tsv("merged_3000_trimmed_viruses_only_20211112_95-85_parsed.tsv", col_names=T)
+```
+
+```{r}
+head(ANI_clusters)
+```
+
+
+```{r}
+
+ANI_clusters_subset <- ANI_clusters %>% 
+  separate(col=contig, into=c("assembly"), sep="--", remove=F)
+
+ANI_clusters_subset <- ANI_clusters_subset[ANI_clusters_subset$assembly %in% ARGs$Assembly,]
+ANI_clusters_subset$contig_match <- sub("\\|\\|", "--", ANI_clusters_subset$contig)
+ARGs$read_id_match <- sub("\\|\\|", "--", ARGs$read_id)
+
+
+ARGs$ANI_cluster <- ""
+for (i in 1:nrow(ANI_clusters_subset)) {
+  ARG_cluster_index <- grep(ANI_clusters_subset$contig_match[i], ARGs$read_id_match)
+  if (length(ARG_cluster_index)>0) {
+    for (j in ARG_cluster_index) {
+      ARGs$ANI_cluster[j] <- ANI_clusters_subset$cluster[i]
+    }
+  }
+}
+
+```
+
+
+```{r}
+tax_assigned_clusters_my_contigs <- read_tsv("tax_assigned_clusters_my_contigs.txt")
+```
+
+
+```{r}
+ARGs <- ARGs %>% 
+  left_join(ANI_clusters, by=c("ANI_cluster"="cluster")) %>%
+  left_join(tax_assigned_clusters_my_contigs,
+            by=c("contig"="Genome"))
+```
+
+```{r}
+tax_assigned_clusters <- read_tsv("tax_assigned_clusters", col_names = T)
+```
+
+```{r}
+table(tax_assigned_clusters$Family[grep("Mycobacterium", tax_assigned_clusters$Genome)])
+```
+92% of Mycobacterium phages are Siphoviridae (the rest are Myoviridae)
+
+```{r}
+length(table(ARGs$ANI_cluster))
+```
+
+```{r}
+table(ARGs$ANI_cluster, ARGs$`#ARG`)
+```
+
+```{r}
+network_connections <- read_delim("c1_all_assemblies.ntw", delim = " ", col_names = F)
+colnames(network_connections) <- c("Partner_One", "Partner_Two", "Weight")
+network_connections$Partner_One <- sub(".*_3000_viralonly_", "", network_connections$Partner_One)
+network_connections$Partner_Two <- sub(".*_3000_viralonly_", "", network_connections$Partner_Two)
+```
+
+```{r}
+network_connections[network_connections$Partner_One=="SRR6797143--NODE_753_length_12267_cov_1_923052||full",]
+network_connections[network_connections$Partner_Two=="SRR6797143--NODE_753_length_12267_cov_1_923052||full",]
+```
+
