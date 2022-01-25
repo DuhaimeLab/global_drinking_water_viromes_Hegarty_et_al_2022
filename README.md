@@ -1,4 +1,4 @@
-# global_drinking_water_viromes_Hegarty_et_al_2021
+# global_drinking_water_viromes_Hegarty_et_al_2022
 
 Repository to accompany "A Snapshot of the Global Drinking Water Virome: Diversity and Metabolic Potential Vary with Residual Disinfectant Use", Hegarty, et al 2021.
 
