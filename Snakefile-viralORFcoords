@@ -1,0 +1,109 @@
+# Read mapping 
+
+#to run snakemake: conda activate snakemake
+
+#set a workflow config file
+configfile: "Config/assemblies_samples_combos.yaml"
+assemblies=config['assembly']
+combos=config['combinations']
+
+
+#if want to run on just some files
+assemblies = ["B"]
+combos = ["B--mgp80824_B"]
+
+rule all_mappingcompetitively:
+    input:
+        counts="FeatureCountsORFs/merged_viral_ORF_count.txt",
+        annots="DRAM/merged_annotations.tsv"
+
+rule blastdb:
+    input:
+        fasta="/home/hegartyb/AssembliesByDot/{assembly}_3000.fasta"
+    params:
+        basepath="Blast/{assembly}_db"
+    output:
+        o1="Blast/{assembly}_db.nsq",
+        o2="Blast/{assembly}_db.nin",
+        o3="Blast/{assembly}_db.nhr"
+    shell:
+        """
+        module load ncbi-blast/2.9.0
+        makeblastdb -in {input.fasta} -dbtype nucl -out {params.basepath}
+        """
+
+#rule split_genes:
+#    input:
+#        fa="DRAM/genes.fna"
+#    output:
+#        fa="DRAM/{assembly}_genes.fna"
+#    params:
+#        assembly="{assembly}"
+#    shell:
+#        "python Scripts/split_orf.py {input.fa} {output.fa} {params.assembly}"
+
+rule blast_nf:
+    input:
+        fa="DRAM/{assembly}/Annotation/genes.fna",
+        i1="Blast/{assembly}_db.nhr"
+    output:
+        o="Blast/{assembly}_genes_results.txt"
+    params:
+        db="Blast/{assembly}_db",
+        threads=15,
+        numalign=5
+    shell:
+        """
+        module load ncbi-blast/2.9.0
+        blastn -num_threads {params.threads} -num_alignments {params.numalign} \
+        -outfmt "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore" \
+        -db {params.db} -query {input.fa} -out {output.o}
+        """
+
+rule blast2gff:
+    input:
+        blast="Blast/{assembly}_genes_results.txt"
+    output:
+        gff="Blast/{assembly}_genes.gff"
+    params:
+        type="CDS"
+    shell:
+        "python Scripts/blast2gff_orf.py {input.blast} {output.gff} {params.type}"
+
+rule featureCounts:
+    input:
+        gff=lambda wildcards: ["Blast/{0}_genes.gff".format(assembly) for assembly in assemblies],
+        bam="Bowtie2/Results/Sample2Assembly/Sorted_reads_mapped_{combos}.bam"
+    output:
+        output="FeatureCountsORFs/{combos}_viral_ORF_count.txt"
+    params:
+        type="CDS",
+        combo_name="{combos}",
+        g="ID"
+    shell:
+        """
+        combo_name={params.combo_name}
+        array_comb=(${{combo_name//--/ }})
+        input_gff="Blast/${{array_comb[0]}}_genes.gff"
+        module load singularity
+        singularity exec /nfs/turbo/lsa-dudelabs/containers/subreads/subreads.sif featureCounts -p -t {params.type} -a ${{input_gff}} -g {params.g} -o {output.output} {input.bam}
+        """
+
+rule mergeorfmapping:
+    input:
+        counts=lambda wildcards: ["FeatureCountsORFs/{0}_viral_ORF_count.txt".format(combo) for combo in combos]
+    output:
+        merged="FeatureCountsORFs/merged_viral_ORF_count.txt"
+    shell:
+        "python Scripts/merge_orf_mapping.py {output.merged} {input.counts}"
+
+rule mergeannotmapping:
+    input:
+        annots=lambda wildcards: ["DRAM/{0}/Annotation/annotations.tsv".format(assembly) for assembly in assemblies]
+    output:
+        merged="DRAM/merged_annotations.tsv"
+    shell:
+        "python Scripts/merge_annotations.py {output.merged} {input.annots}"
+
+
+
