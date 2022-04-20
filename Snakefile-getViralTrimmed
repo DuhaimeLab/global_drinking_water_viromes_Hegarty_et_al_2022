@@ -1,4 +1,4 @@
-# Contig processing, blast on viral sequences against mycobacteriophages, pulling out all mycobacteriophage contigs
+# Contig processing, get a high confidence set of viral contigs
 
 #to run snakemake: conda activate cluster_kaiju
 
