@@ -1,6 +1,7 @@
 # Contig processing, get a high confidence set of viral contigs
 
-#to run snakemake: conda activate cluster_kaiju
+#to run snakemake: conda activate snakemake
+## need an environment with Snakemake loaded in it and ability to load Biopython 
 
 #set a workflow config file
 configfile: "Config/assemblies_samples_combos.yaml"
