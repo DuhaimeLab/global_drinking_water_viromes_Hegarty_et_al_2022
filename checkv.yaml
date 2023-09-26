@@ -1,0 +1,9 @@
+name: checkV2
+channels:
+  - conda-forge
+  - defaults
+  - bioconda
+dependencies:
+  - python=3.7
+  - checkv=0.7.0
+  - hmmer=3.3.0

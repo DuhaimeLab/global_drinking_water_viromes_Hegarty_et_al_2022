@@ -1,0 +1,7 @@
+name: virsorter
+channels:
+  - bioconda
+  - conda-forge
+  - defaults
+dependencies:
+  - virsorter=1.0.6

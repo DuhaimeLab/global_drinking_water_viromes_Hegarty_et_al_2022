@@ -1,0 +1,133 @@
+__default__:
+  jobname: "{rule}.{wildcards}"
+  nodes: 1
+  ntaskspernode: 1
+  cpuspertask: 1
+  mempercpu: "1g"
+  time: "00-00:60:00"
+  account: "kwigg1"
+  partition: "standard"
+  mailuser: "hegartyb@umich.edu"
+  mailtype: "NONE"
+  output: "Logs/%x-%j.out"
+
+fastp:
+  mempercpu: "200m"
+  time: "60:00"
+  cpuspertask: 20
+
+virfinder:
+  cpuspertask: 1
+  time: "72:00:00"
+  mempercpu: "500M"
+
+virsorter:
+  cpuspertask: 30
+  time: "60:00:00"
+  mempercpu: "2g"
+
+deepvirfinder:
+  cpuspertask: 15
+  time: "25:00:00"
+  mempercpu: "1g"
+  nodes: 4
+
+percent_viral:
+  time: "00:10:00"
+
+merge_dvf_vf:
+  time: "00:10:00"
+
+merge_vs:
+  time: "00:10:00"
+
+c_merge:
+  time: "00:10:00"
+
+bowtie_build_univec:
+  mempercpu: "10g"
+
+bowtie_univec:
+  cpuspertask: 8
+  mempercpu: "1g"
+
+build_bowtie_index:
+  mempercpu: "20g"
+
+blast_nf:
+  time: "10:00:00"
+  cpuspertask: 15
+
+vibrant:
+  cpuspertask: 4
+  time: "1:00:00"
+  mempercpu: "10M"
+
+checkV_contamination:
+  cpuspertask: 16
+  mempercpu: "1g"
+  time: "4-00:00:00"
+
+checkV_completeness:
+  cpuspertask: 16
+  mempercpu: "1g"
+  time: "30:00:00"
+
+checkV_genomes:
+  time: "5:00:00"
+  mempercpu: "1g"
+
+checkV_quality:
+  time: "5:00:00"
+  mempercpu: "1g"
+
+bowtie_build_univec:
+  mempercpu: "10g"
+
+bowtie_univec:
+  cpuspertask: 8
+  mempercpu: "1g"
+
+bowtie_build:
+  mempercpu: "30g"
+  time: "40:00:00"
+  cpuspertask: 5
+
+bowtie:
+  cpuspertask: 8
+  mempercpu: "1g"
+
+bowtie_virus:
+  cpuspertask: 8
+  mempercpu: "1g"
+  time: "10:00:00"
+
+bowtie_virus_downsampled:
+  cpuspertask: 8
+  mempercpu: "1g"
+
+sort_virus:
+  mempercpu: "10g"
+
+cdhitest:
+  mempercpu: "10g"
+  cpuspertask: 8
+
+kofamscan:
+  cpuspertask: 20
+  mempercpu: "1g"
+  time: "10:00:00"
+
+read_counts:
+  mempercpu: "5g"
+
+blast:
+  time: "70:00:00"
+  cpuspertask: 15
+  mempercpu: "150m"
+
+blast_database:
+  mempercpu: "1g"
+
+coverage:
+  mempercpu: "1g"
