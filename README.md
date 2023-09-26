@@ -4,6 +4,8 @@ Repository to accompany "A Snapshot of the Global Drinking Water Virome: Diversi
 
 This code provides the scripts necessary to replicate the analyses described in the paper.
 
+Update Sept. 2023: We recommend checking out our updated viral identification pipeline here: https://www.biorxiv.org/content/10.1101/2023.08.07.552334v2
+
 ## Identifying Viral Sequences
 
 To identify a set of possible contigs:
